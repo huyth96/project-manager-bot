@@ -1926,6 +1926,12 @@ public sealed class ProjectCommandModule(
     [SlashCommand("setup", "Gắn kênh hiện tại vào dự án và khởi tạo dashboard.")]
     public async Task SetupProjectAsync(string name)
     {
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể cấu hình dự án.", ephemeral: true);
+            return;
+        }
+
         await DeferAsync(ephemeral: true);
 
         var bugChannel = Context.Guild.TextChannels
@@ -2060,6 +2066,12 @@ public sealed class ProjectCommandModule(
     [SlashCommand("github-list", "Xem danh sách repo GitHub đang được theo dõi của dự án hiện tại.")]
     public async Task GitHubListAsync()
     {
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể xem cấu hình theo dõi GitHub.", ephemeral: true);
+            return;
+        }
+
         await DeferAsync(ephemeral: true);
         var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
         if (project is null)
