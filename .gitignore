@@ -20,4 +20,6 @@ obj/
 # Secrets / local overrides
 appsettings.Local.json
 secrets.json
-
+.env
+.env.*
+!.env.example

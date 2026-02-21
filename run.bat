@@ -3,6 +3,11 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist ".env" (
+    echo [WARN] Khong tim thay file .env.
+    echo [WARN] Hay tao .env tu .env.example va dien token truoc khi chay.
+)
+
 where dotnet >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Khong tim thay dotnet SDK trong PATH.
