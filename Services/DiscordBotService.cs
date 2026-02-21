@@ -61,21 +61,21 @@ public sealed class DiscordBotService(
 
         if (_options.RegisterCommandsGlobally)
         {
-            await _interactionService.RegisterCommandsGloballyAsync(deleteMissing: false);
+            await _interactionService.RegisterCommandsGloballyAsync(deleteMissing: true);
             _logger.LogInformation("Đã đăng ký slash command ở phạm vi toàn cục");
             return;
         }
 
         if (_options.GuildId != 0)
         {
-            await _interactionService.RegisterCommandsToGuildAsync(_options.GuildId, deleteMissing: false);
+            await _interactionService.RegisterCommandsToGuildAsync(_options.GuildId, deleteMissing: true);
             _logger.LogInformation("Đã đăng ký slash command cho guild {GuildId}", _options.GuildId);
             return;
         }
 
         foreach (var guild in _client.Guilds)
         {
-            await _interactionService.RegisterCommandsToGuildAsync(guild.Id, deleteMissing: false);
+            await _interactionService.RegisterCommandsToGuildAsync(guild.Id, deleteMissing: true);
             _logger.LogInformation("Đã đăng ký slash command cho guild {GuildId}", guild.Id);
         }
     }

@@ -27,16 +27,16 @@ Bot hỗ trợ theo dõi **repo GitHub bên ngoài** (repo game của bạn), kh
 
 1. Đảm bảo kênh dự án đã được gắn (`/project setup` hoặc `/studio-init`).
 2. Bind repo game vào project Discord:
-   - `/project github-bind repository:owner/repo branch:main`
-   - Có thể dán URL đầy đủ GitHub thay cho `owner/repo`.
-   - Theo dõi mọi nhánh: `/project github-bind repository:owner/repo branch:*` (hoặc `branch:all`)
+   - `/project github-bind repository:<owner/repo-that>`
+   - Mặc định bot theo dõi mọi nhánh (`branch:*`).
+   - Có thể dán URL đầy đủ GitHub thay cho `owner/repo-that`.
 3. Kiểm tra danh sách binding:
    - `/project github-list`
 4. Quét thủ công để test ngay:
    - `/project github-sync`
 5. Gỡ theo dõi:
-   - `/project github-unbind repository:owner/repo branch:main`
-   - Gỡ toàn bộ nhánh của repo: `/project github-unbind repository:owner/repo branch:*`
+   - Mặc định gỡ toàn bộ nhánh của repo: `/project github-unbind repository:<owner/repo-that>`
+   - Hoặc chỉ gỡ 1 nhánh cụ thể: `/project github-unbind repository:<owner/repo-that> branch:main`
 
 Thông báo push sẽ gửi vào kênh `#github-commits` (hoặc kênh bạn chỉ định khi bind).
 

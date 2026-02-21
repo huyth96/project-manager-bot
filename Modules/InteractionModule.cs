@@ -1840,8 +1840,8 @@ public sealed class ProjectCommandModule(
             ephemeral: true);
     }
 
-    [SlashCommand("github-bind", "Gắn repo GitHub để theo dõi push. Dùng branch=* hoặc all để theo dõi mọi nhánh.")]
-    public async Task GitHubBindAsync(string repository, string branch = "main", ITextChannel? notifyChannel = null)
+    [SlashCommand("github-bind", "Gắn repo GitHub để theo dõi push (mặc định: mọi nhánh).")]
+    public async Task GitHubBindAsync(string repository, string branch = "*", ITextChannel? notifyChannel = null)
     {
         if (!IsLeadOrAdmin())
         {
@@ -1851,7 +1851,10 @@ public sealed class ProjectCommandModule(
 
         if (!GitHubTrackingService.TryNormalizeRepository(repository, out var normalizedRepo))
         {
-            await RespondAsync("Repo không hợp lệ. Dùng dạng `owner/repo` hoặc URL GitHub.", ephemeral: true);
+            await RespondAsync(
+                "Repo không hợp lệ. Dùng dạng `owner/repo-thật` hoặc URL GitHub.\n" +
+                "> `owner/repo` chỉ là ví dụ, không phải tên thật.",
+                ephemeral: true);
             return;
         }
 
@@ -1870,7 +1873,7 @@ public sealed class ProjectCommandModule(
 
         await _projectService.SetGitHubCommitsChannelAsync(project.Id, targetChannelId);
 
-        var branchInput = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
+        var branchInput = string.IsNullOrWhiteSpace(branch) ? "*" : branch.Trim();
         var isTrackAllBranches = GitHubTrackingService.IsTrackAllBranches(branchInput);
 
         var binding = await _gitHubTrackingService.UpsertBindingAsync(
@@ -1893,8 +1896,8 @@ public sealed class ProjectCommandModule(
             ephemeral: true);
     }
 
-    [SlashCommand("github-unbind", "Ngừng theo dõi repo GitHub. Dùng branch=* hoặc all để gỡ toàn bộ nhánh của repo.")]
-    public async Task GitHubUnbindAsync(string repository, string branch = "main")
+    [SlashCommand("github-unbind", "Ngừng theo dõi repo GitHub. Mặc định gỡ toàn bộ nhánh của repo.")]
+    public async Task GitHubUnbindAsync(string repository, string branch = "*")
     {
         if (!IsLeadOrAdmin())
         {
@@ -1904,7 +1907,10 @@ public sealed class ProjectCommandModule(
 
         if (!GitHubTrackingService.TryNormalizeRepository(repository, out var normalizedRepo))
         {
-            await RespondAsync("Repo không hợp lệ. Dùng dạng `owner/repo` hoặc URL GitHub.", ephemeral: true);
+            await RespondAsync(
+                "Repo không hợp lệ. Dùng dạng `owner/repo-thật` hoặc URL GitHub.\n" +
+                "> `owner/repo` chỉ là ví dụ, không phải tên thật.",
+                ephemeral: true);
             return;
         }
 
@@ -1916,7 +1922,7 @@ public sealed class ProjectCommandModule(
             return;
         }
 
-        var branchInput = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
+        var branchInput = string.IsNullOrWhiteSpace(branch) ? "*" : branch.Trim();
         var isTrackAllBranches = GitHubTrackingService.IsTrackAllBranches(branchInput);
 
         var removed = await _gitHubTrackingService.RemoveBindingAsync(
@@ -1964,7 +1970,14 @@ public sealed class ProjectCommandModule(
             var expandedCount = bindings.Count(x =>
                 x.RepoFullName.Equals(wildcard.RepoFullName, StringComparison.OrdinalIgnoreCase) &&
                 x.Branch != "*");
-            lines.Add($"- `{wildcard.RepoFullName}` • branch `*` (mọi nhánh, hiện `{expandedCount}` nhánh)");
+            if (expandedCount == 0)
+            {
+                lines.Add($"- `{wildcard.RepoFullName}` • mọi nhánh (`*`) • đang đồng bộ danh sách nhánh");
+            }
+            else
+            {
+                lines.Add($"- `{wildcard.RepoFullName}` • mọi nhánh (`*`) • đã đồng bộ `{expandedCount}` nhánh");
+            }
         }
 
         foreach (var single in bindings

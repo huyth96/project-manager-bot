@@ -65,6 +65,12 @@ public sealed class GitHubTrackingService(
         }
 
         normalized = $"{parts[0]}/{parts[1]}";
+        if (normalized.Equals("owner/repo", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = string.Empty;
+            return false;
+        }
+
         return true;
     }
 
