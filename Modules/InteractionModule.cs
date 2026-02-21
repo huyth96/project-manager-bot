@@ -68,6 +68,7 @@ public sealed class InteractionModule(
             $"- Kênh báo cáo ngày: <#{setupResult.DailyStandupChannelId}>\n" +
             $"- Kênh github-commits: <#{setupResult.GitHubCommitsChannelId}>\n" +
             $"- Kênh thông báo toàn cục: <#{setupResult.GlobalTaskFeedChannelId}>\n" +
+            $"- Kênh shop: <#{setupResult.ShopChannelId}>\n" +
             $"- Mã dự án: `{project.Id}`",
             ephemeral: true);
     }
@@ -1930,11 +1931,11 @@ public sealed class ProjectCommandModule(
         var bugChannel = Context.Guild.TextChannels
             .FirstOrDefault(x => x.Name.Contains("bugs", StringComparison.OrdinalIgnoreCase));
         var standupChannel = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Equals("daily-standup", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x => x.Name.Contains("daily-standup", StringComparison.OrdinalIgnoreCase));
         var githubCommitsChannel = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Equals("github-commits", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x => x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
         var globalTaskFeed = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Equals("global-task-feed", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x => x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase));
 
         var project = await _projectService.UpsertProjectAsync(
             name: name.Trim(),
@@ -1985,7 +1986,7 @@ public sealed class ProjectCommandModule(
 
         var targetChannelId = notifyChannel?.Id
             ?? project.GitHubCommitsChannelId
-            ?? Context.Guild.TextChannels.FirstOrDefault(x => x.Name.Equals("github-commits", StringComparison.OrdinalIgnoreCase))?.Id
+            ?? Context.Guild.TextChannels.FirstOrDefault(x => x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase))?.Id
             ?? Context.Channel.Id;
 
         await _projectService.SetGitHubCommitsChannelAsync(project.Id, targetChannelId);

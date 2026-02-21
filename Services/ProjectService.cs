@@ -174,6 +174,45 @@ public sealed class ProjectService(
         return user.XP;
     }
 
+    public async Task<int> GetUserXpAsync(ulong discordId, CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var xp = await db.Users
+            .Where(x => x.DiscordId == discordId)
+            .Select(x => (int?)x.XP)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return xp ?? 0;
+    }
+
+    public async Task<(bool Success, int RemainingXp)> SpendXpAsync(
+        ulong discordId,
+        int xp,
+        CancellationToken cancellationToken = default)
+    {
+        if (xp <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(xp), "XP cần trừ phải lớn hơn 0.");
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var user = await db.Users.FirstOrDefaultAsync(x => x.DiscordId == discordId, cancellationToken);
+        if (user is null)
+        {
+            return (false, 0);
+        }
+
+        if (user.XP < xp)
+        {
+            return (false, user.XP);
+        }
+
+        user.XP -= xp;
+        await db.SaveChangesAsync(cancellationToken);
+
+        return (true, user.XP);
+    }
+
     public async Task SaveStandupReportAsync(
         int projectId,
         ulong discordUserId,
