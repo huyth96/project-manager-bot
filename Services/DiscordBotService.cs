@@ -20,7 +20,7 @@ public sealed class DiscordBotService(
     private readonly DiscordBotOptions _options = options.Value;
     private readonly ILogger<DiscordBotService> _logger = logger;
     private const string RoleSelectionChannelSlug = "role-selection";
-    private const string RoleSelectionEmbedTitle = "\U0001F3AD Nhận Role Tự Động";
+    private const string RoleSelectionEmbedTitle = "\U0001F3AD Chọn Vai Trò";
     private static readonly IReadOnlyDictionary<string, string> ReactionRoleMap = new Dictionary<string, string>
     {
         ["\U0001F3AE"] = "Developer",

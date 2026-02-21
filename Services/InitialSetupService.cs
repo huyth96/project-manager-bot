@@ -11,13 +11,14 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
     private const string MeetingCategory = "\U0001F50A H\u1ECCP H\u00C0NH";
     private const string RoleSelectionChannelSlug = "role-selection";
     private const string RoleSelectionChannelName = "\U0001F3AD-" + RoleSelectionChannelSlug;
-    private const string OnboardChannelName = "\U0001F9ED-onboard";
+    private const string OnboardingChannelName = "\U0001F9ED-onboarding";
     private const string WikiChannelName = "\U0001F4D8-wiki";
     private const string ShopChannelName = "\U0001F6D2-shop";
-    private const string RoleSelectionEmbedTitle = "\U0001F3AD Nhận Role Tự Động";
-    private const string OnboardingEmbedTitle = "\U0001F9ED Bắt Đầu Nhanh Cho Thành Viên Mới";
-    private const string WikiEmbedTitle = "\U0001F4D8 Tài Liệu Thiết Kế Dự Án A";
-    private const string ShopEmbedTitle = "\U0001F6D2 Chợ Role Xịn";
+    private const string RoleSelectionEmbedTitle = "\U0001F3AD Chọn Vai Trò";
+    private const string OnboardingEmbedTitle = "\U0001F9ED Hướng Dẫn Bắt Đầu";
+    private const string WikiEmbedTitle = "\U0001F4D8 Tài Liệu Dự Án A";
+    private const string ShopEmbedTitle = "\U0001F6D2 Cửa Hàng Vai Trò";
+    private const string ChannelGuideEmbedTitle = "\U0001F5C2\uFE0F Hướng Dẫn Sử Dụng Kênh";
     private const string ProjectDesignDocsUrl = "https://drive.google.com/drive/u/1/folders/1gXvOvh5Ab6x26ddpOI5TLKedQdtjWECm";
 
     private static readonly IReadOnlyDictionary<string, string> ReactionRoleMap = new Dictionary<string, string>
@@ -32,33 +33,97 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
     {
         var deletedChannelsCount = await ResetAllChannelsAsync(guild);
 
-        var leadRole = await EnsureRoleAsync(guild, "Studio Lead");
-        var developerRole = await EnsureRoleAsync(guild, "Developer");
-        var artistRole = await EnsureRoleAsync(guild, "Artist");
+        var leadRole = await EnsureRoleAsync(guild, "Studio Lead", new Color(230, 126, 34), isHoisted: true);
+        var developerRole = await EnsureRoleAsync(guild, "Developer", new Color(52, 152, 219));
+        var artistRole = await EnsureRoleAsync(guild, "Artist", new Color(231, 76, 60));
 
         var mainHall = await EnsureCategoryAsync(guild, MainHallCategory);
         var projectHall = await EnsureCategoryAsync(guild, ProjectCategory);
         var botZone = await EnsureCategoryAsync(guild, BotZoneCategory);
         var meetingHall = await EnsureCategoryAsync(guild, MeetingCategory);
 
-        var announcements = await EnsureTextChannelAsync(guild, mainHall.Id, "\U0001F4E3-announcements");
-        var resourcesWiki = await EnsureTextChannelAsync(guild, mainHall.Id, WikiChannelName);
-        var generalChat = await EnsureTextChannelAsync(guild, mainHall.Id, "\U0001F4AC-general-chat");
-        var onboarding = await EnsureTextChannelAsync(guild, mainHall.Id, OnboardChannelName);
-        var roleSelection = await EnsureTextChannelAsync(guild, mainHall.Id, RoleSelectionChannelName);
-        var roleShop = await EnsureTextChannelAsync(guild, mainHall.Id, ShopChannelName);
+        var announcements = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            "\U0001F4E3-announcements",
+            "Thông báo chính thức của studio: lịch, mốc sprint và cập nhật quan trọng.");
+        var resourcesWiki = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            WikiChannelName,
+            "Tài liệu thiết kế Project A, guideline kỹ thuật và tài nguyên tham khảo.");
+        var generalChat = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            "\U0001F4AC-general-chat",
+            "Khu trò chuyện chung của thành viên.");
+        var onboarding = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            OnboardingChannelName,
+            "Điểm khởi đầu cho thành viên mới: đọc wiki, chọn role, theo dõi dashboard.");
+        var roleSelection = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            RoleSelectionChannelName,
+            "Thả reaction vào tin nhắn bot để nhận hoặc gỡ role.");
+        var roleShop = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            ShopChannelName,
+            "Mua role bằng XP bằng button hoặc slash command /shop.");
 
-        var p1Dashboard = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F5FA\uFE0F-p1-dashboard");
-        var p1Backlog = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F4DC-p1-backlog");
-        var p1General = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F3AE-p1-general");
-        var p1ArtShowcase = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F3A8-p1-art-showcase");
-        var p1DevTalk = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F4BB-p1-dev-talk");
-        var p1Bugs = await EnsureTextChannelAsync(guild, projectHall.Id, "\U0001F41E-p1-bugs");
+        var p1Dashboard = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F5FA\uFE0F-p1-dashboard",
+            "Bảng điều phối sprint và trạng thái dự án.");
+        var p1Backlog = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F4DC-p1-backlog",
+            "Nơi thêm nhiệm vụ tồn đọng trước khi vào sprint.");
+        var p1General = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F3AE-p1-general",
+            "Trao đổi công việc chung của team Project A.");
+        var p1ArtShowcase = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F3A8-p1-art-showcase",
+            "Đăng sản phẩm art để nhận góp ý; bot sẽ tự tạo thread thảo luận.");
+        var p1DevTalk = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F4BB-p1-dev-talk",
+            "Trao đổi kỹ thuật, kiến trúc và giải pháp triển khai.");
+        var p1Bugs = await EnsureTextChannelAsync(
+            guild,
+            projectHall.Id,
+            "\U0001F41E-p1-bugs",
+            "Báo lỗi và theo dõi trạng thái xử lý bug.");
 
-        var dailyStandup = await EnsureTextChannelAsync(guild, botZone.Id, "\U0001F4DD-daily-standup");
-        var githubCommits = await EnsureTextChannelAsync(guild, botZone.Id, "\U0001F4E6-github-commits");
-        var commandLogs = await EnsureTextChannelAsync(guild, botZone.Id, "\U0001F9FE-command-logs");
-        var globalTaskFeed = await EnsureTextChannelAsync(guild, botZone.Id, "\U0001F4E2-global-task-feed");
+        var dailyStandup = await EnsureTextChannelAsync(
+            guild,
+            botZone.Id,
+            "\U0001F4DD-daily-standup",
+            "Nơi bot nhắc và tổng hợp báo cáo hằng ngày.");
+        var githubCommits = await EnsureTextChannelAsync(
+            guild,
+            botZone.Id,
+            "\U0001F4E6-github-commits",
+            "Log commit/push tự động từ GitHub.");
+        var commandLogs = await EnsureTextChannelAsync(
+            guild,
+            botZone.Id,
+            "\U0001F9FE-command-logs",
+            "Nhật ký lệnh bot, dành cho admin và Studio Lead.");
+        var globalTaskFeed = await EnsureTextChannelAsync(
+            guild,
+            botZone.Id,
+            "\U0001F4E2-global-task-feed",
+            "Thông báo task toàn cục: quá hạn, cập nhật quan trọng.");
 
         var dailyScrum = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F399\uFE0F Daily Scrum");
         var coWorking = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F3A7 Co-working");
@@ -99,10 +164,32 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             ]);
         await ConfigureRoleSelectionPermissionsAsync(guild, roleSelection);
         await ConfigureShopChannelPermissionsAsync(guild, roleShop);
-        await EnsureRoleSelectionMessageAsync(guild, roleSelection);
-        await EnsureOnboardingMessageAsync(guild, onboarding);
-        await EnsureWikiMessageAsync(guild, resourcesWiki);
+        await EnsureRoleSelectionMessageAsync(guild, roleSelection, onboarding, roleShop);
+        await EnsureOnboardingMessageAsync(
+            guild,
+            onboarding,
+            resourcesWiki,
+            roleSelection,
+            p1Dashboard,
+            roleShop);
+        await EnsureWikiMessageAsync(guild, resourcesWiki, onboarding, p1Dashboard);
         await EnsureShopMessageAsync(guild, roleShop);
+        await EnsureChannelGuideMessageAsync(
+            guild,
+            onboarding,
+            resourcesWiki,
+            onboarding,
+            roleSelection,
+            roleShop,
+            p1Dashboard,
+            p1Backlog,
+            p1General,
+            p1ArtShowcase,
+            p1DevTalk,
+            p1Bugs,
+            dailyStandup,
+            githubCommits,
+            globalTaskFeed);
         await ConfigureCommandLogsPermissionsAsync(guild, commandLogs, leadRole);
 
         return new StudioSetupResult
@@ -144,19 +231,36 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         return deleted;
     }
 
-    private static async Task<IRole> EnsureRoleAsync(SocketGuild guild, string roleName)
+    private static async Task<IRole> EnsureRoleAsync(
+        SocketGuild guild,
+        string roleName,
+        Color roleColor,
+        bool isHoisted = false)
     {
         var existing = guild.Roles.FirstOrDefault(x => x.Name.Equals(roleName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
+            var needsUpdate = existing.Color.RawValue != roleColor.RawValue ||
+                              existing.IsHoisted != isHoisted ||
+                              !existing.IsMentionable;
+            if (needsUpdate)
+            {
+                await existing.ModifyAsync(props =>
+                {
+                    props.Color = roleColor;
+                    props.Hoist = isHoisted;
+                    props.Mentionable = true;
+                });
+            }
+
             return existing;
         }
 
         return await guild.CreateRoleAsync(
             name: roleName,
             permissions: GuildPermissions.None,
-            color: null,
-            isHoisted: false,
+            color: roleColor,
+            isHoisted: isHoisted,
             isMentionable: true);
     }
 
@@ -171,16 +275,32 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         return await guild.CreateCategoryChannelAsync(name);
     }
 
-    private static async Task<ITextChannel> EnsureTextChannelAsync(SocketGuild guild, ulong categoryId, string name)
+    private static async Task<ITextChannel> EnsureTextChannelAsync(
+        SocketGuild guild,
+        ulong categoryId,
+        string name,
+        string? topic = null)
     {
         var existing = guild.TextChannels.FirstOrDefault(
             x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.CategoryId == categoryId);
         if (existing is not null)
         {
+            if (!string.Equals(existing.Topic ?? string.Empty, topic ?? string.Empty, StringComparison.Ordinal))
+            {
+                await existing.ModifyAsync(props =>
+                {
+                    props.Topic = topic;
+                });
+            }
+
             return existing;
         }
 
-        return await guild.CreateTextChannelAsync(name, props => { props.CategoryId = categoryId; });
+        return await guild.CreateTextChannelAsync(name, props =>
+        {
+            props.CategoryId = categoryId;
+            props.Topic = topic;
+        });
     }
 
     private static async Task<IVoiceChannel> EnsureVoiceChannelAsync(SocketGuild guild, ulong categoryId, string name)
@@ -310,7 +430,11 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 readMessageHistory: PermValue.Allow));
     }
 
-    private async Task EnsureRoleSelectionMessageAsync(SocketGuild guild, ITextChannel roleSelectionChannel)
+    private async Task EnsureRoleSelectionMessageAsync(
+        SocketGuild guild,
+        ITextChannel roleSelectionChannel,
+        ITextChannel onboardingChannel,
+        ITextChannel shopChannel)
     {
         var existingMessage = (await roleSelectionChannel.GetMessagesAsync(20).FlattenAsync())
             .OfType<IUserMessage>()
@@ -318,25 +442,47 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 x.Author.Id == guild.CurrentUser.Id &&
                 x.Embeds.FirstOrDefault()?.Title == RoleSelectionEmbedTitle);
 
+        var components = new ComponentBuilder()
+            .WithButton(
+                "Huong dan bat dau",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, onboardingChannel.Id))
+            .WithButton(
+                "Mo cua hang role",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, shopChannel.Id))
+            .Build();
+
         var embed = new EmbedBuilder()
             .WithTitle(RoleSelectionEmbedTitle)
             .WithColor(Color.Blue)
             .WithDescription(
-                "Thả reaction để tự nhận/gỡ role:\n" +
-                "- \U0001F3AE `Developer`\n" +
-                "- \U0001F3A8 `Artist`\n\n" +
-                "Gỡ reaction nếu muốn bỏ role.")
+                "Thả reaction bên dưới để nhận vai trò.\n" +
+                "Gỡ reaction nếu muốn rời vai trò.")
+            .AddField(
+                "\U0001F3AE Developer",
+                "Dành cho thành viên tập trung dev, kỹ thuật và xử lý task/bug.",
+                true)
+            .AddField(
+                "\U0001F3A8 Artist",
+                "Dành cho thành viên tập trung art, showcase và feedback hình ảnh.",
+                true)
+            .AddField(
+                "Luu y",
+                "Bot cần quyền `Manage Roles` và role bot phải đứng trên các role thành viên.",
+                false)
             .Build();
 
         if (existingMessage is null)
         {
-            existingMessage = await roleSelectionChannel.SendMessageAsync(embed: embed);
+            existingMessage = await roleSelectionChannel.SendMessageAsync(embed: embed, components: components);
         }
         else
         {
             await existingMessage.ModifyAsync(props =>
             {
                 props.Embed = embed;
+                props.Components = components;
             });
         }
 
@@ -357,7 +503,13 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         }
     }
 
-    private async Task EnsureOnboardingMessageAsync(SocketGuild guild, ITextChannel onboardingChannel)
+    private async Task EnsureOnboardingMessageAsync(
+        SocketGuild guild,
+        ITextChannel onboardingChannel,
+        ITextChannel wikiChannel,
+        ITextChannel roleSelectionChannel,
+        ITextChannel dashboardChannel,
+        ITextChannel shopChannel)
     {
         var existingMessage = (await onboardingChannel.GetMessagesAsync(20).FlattenAsync())
             .OfType<IUserMessage>()
@@ -365,32 +517,70 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 x.Author.Id == guild.CurrentUser.Id &&
                 x.Embeds.FirstOrDefault()?.Title == OnboardingEmbedTitle);
 
+        var components = new ComponentBuilder()
+            .WithButton(
+                "Wiki",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, wikiChannel.Id))
+            .WithButton(
+                "Chon vai tro",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, roleSelectionChannel.Id))
+            .WithButton(
+                "Dashboard",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, dashboardChannel.Id))
+            .WithButton(
+                "Shop",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, shopChannel.Id))
+            .Build();
+
         var embed = new EmbedBuilder()
             .WithTitle(OnboardingEmbedTitle)
             .WithColor(Color.Green)
             .WithDescription(
-                "Chào mừng bạn đến với studio.\n\n" +
-                "Lộ trình đề xuất:\n" +
-                "1. Vào `📘-wiki` để đọc tài liệu dự án.\n" +
-                "2. Vào `🎭-role-selection` để tự nhận role phù hợp.\n" +
-                "3. Vào `🗺️-p1-dashboard` để nắm trạng thái sprint.\n" +
-                "4. Dùng `/shop view` trong `🛒-shop` để xem role xịn.\n\n" +
-                "Nếu có vướng mắc, ping `Studio Lead`.")
+                "Chào mừng bạn đến với studio. Làm theo các bước sau để bắt đầu nhanh.")
+            .AddField(
+                "1) Doc tai lieu",
+                $"- Mở <#{wikiChannel.Id}> và đọc mục thiết kế chính.",
+                false)
+            .AddField(
+                "2) Chon vai tro",
+                $"- Vào <#{roleSelectionChannel.Id}> và thả reaction để nhận role.",
+                false)
+            .AddField(
+                "3) Theo doi tien do",
+                $"- Xem <#{dashboardChannel.Id}> để nắm sprint và task hiện tại.",
+                false)
+            .AddField(
+                "4) Mua role bang point",
+                $"- Mở <#{shopChannel.Id}> và dùng button hoặc lệnh `/shop`.",
+                false)
+            .AddField(
+                "Can ho tro?",
+                "- Ping `Studio Lead` hoặc admin trong `💬-general-chat`.",
+                false)
             .Build();
 
         if (existingMessage is null)
         {
-            await onboardingChannel.SendMessageAsync(embed: embed);
+            await onboardingChannel.SendMessageAsync(embed: embed, components: components);
             return;
         }
 
         await existingMessage.ModifyAsync(props =>
         {
             props.Embed = embed;
+            props.Components = components;
         });
     }
 
-    private async Task EnsureWikiMessageAsync(SocketGuild guild, ITextChannel wikiChannel)
+    private async Task EnsureWikiMessageAsync(
+        SocketGuild guild,
+        ITextChannel wikiChannel,
+        ITextChannel onboardingChannel,
+        ITextChannel dashboardChannel)
     {
         var existingMessage = (await wikiChannel.GetMessagesAsync(20).FlattenAsync())
             .OfType<IUserMessage>()
@@ -398,27 +588,43 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 x.Author.Id == guild.CurrentUser.Id &&
                 x.Embeds.FirstOrDefault()?.Title == WikiEmbedTitle);
 
+        var components = new ComponentBuilder()
+            .WithButton(
+                "Mo tai lieu Project A",
+                style: ButtonStyle.Link,
+                url: ProjectDesignDocsUrl)
+            .WithButton(
+                "Onboarding",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, onboardingChannel.Id))
+            .WithButton(
+                "Dashboard",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, dashboardChannel.Id))
+            .Build();
+
         var embed = new EmbedBuilder()
             .WithTitle(WikiEmbedTitle)
             .WithColor(Color.Blue)
             .WithDescription(
                 "Kho tài liệu chính thức của **Project A**:\n" +
                 $"{ProjectDesignDocsUrl}\n\n" +
-                "Gợi ý đọc nhanh:\n" +
-                "- Vision & gameplay loop\n" +
-                "- Art direction\n" +
-                "- Tech design và task breakdown")
+                "Đề xuất thứ tự đọc:\n" +
+                "1. Vision và gameplay loop\n" +
+                "2. Art direction\n" +
+                "3. Tech design và task breakdown")
             .Build();
 
         if (existingMessage is null)
         {
-            await wikiChannel.SendMessageAsync(embed: embed);
+            await wikiChannel.SendMessageAsync(embed: embed, components: components);
             return;
         }
 
         await existingMessage.ModifyAsync(props =>
         {
             props.Embed = embed;
+            props.Components = components;
         });
     }
 
@@ -430,27 +636,137 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 x.Author.Id == guild.CurrentUser.Id &&
                 x.Embeds.FirstOrDefault()?.Title == ShopEmbedTitle);
 
+        var components = BuildShopPanelComponents();
         var embed = new EmbedBuilder()
             .WithTitle(ShopEmbedTitle)
             .WithColor(Color.Gold)
             .WithDescription(
-                "Dùng slash command để mua role bằng point (XP):\n" +
-                "- `/shop view`: xem danh sách role\n" +
-                "- `/shop balance`: xem điểm hiện tại\n" +
-                "- `/shop buy`: mua role xịn\n\n" +
-                "Point (XP) nhận được khi hoàn thành task/bug.")
+                "Dùng bảng tương tác bên dưới để mua role bằng point (XP).\n" +
+                "Bạn cũng có thể dùng slash command nếu muốn.")
+            .AddField(
+                "Role hien co",
+                "- `VIP Gold` • `120 XP`\n" +
+                "- `Diamond Member` • `300 XP`\n" +
+                "- `Mythic Core` • `600 XP`",
+                false)
+            .AddField(
+                "Lenh thay the",
+                "- `/shop view`\n" +
+                "- `/shop balance`\n" +
+                "- `/shop buy`",
+                false)
+            .AddField(
+                "Nguon point",
+                "XP được cộng khi hoàn thành task/bug trong dự án.",
+                false)
             .Build();
 
         if (existingMessage is null)
         {
-            await shopChannel.SendMessageAsync(embed: embed);
+            await shopChannel.SendMessageAsync(embed: embed, components: components);
             return;
         }
 
         await existingMessage.ModifyAsync(props =>
         {
             props.Embed = embed;
+            props.Components = components;
         });
+    }
+
+    private async Task EnsureChannelGuideMessageAsync(
+        SocketGuild guild,
+        ITextChannel guideChannel,
+        ITextChannel wikiChannel,
+        ITextChannel onboardingChannel,
+        ITextChannel roleSelectionChannel,
+        ITextChannel shopChannel,
+        ITextChannel dashboardChannel,
+        ITextChannel backlogChannel,
+        ITextChannel projectGeneralChannel,
+        ITextChannel artShowcaseChannel,
+        ITextChannel devTalkChannel,
+        ITextChannel bugsChannel,
+        ITextChannel standupChannel,
+        ITextChannel githubCommitsChannel,
+        ITextChannel globalTaskFeedChannel)
+    {
+        var existingMessage = (await guideChannel.GetMessagesAsync(30).FlattenAsync())
+            .OfType<IUserMessage>()
+            .FirstOrDefault(x =>
+                x.Author.Id == guild.CurrentUser.Id &&
+                x.Embeds.FirstOrDefault()?.Title == ChannelGuideEmbedTitle);
+
+        var components = new ComponentBuilder()
+            .WithButton(
+                "Onboarding",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, onboardingChannel.Id))
+            .WithButton(
+                "Dashboard",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, dashboardChannel.Id))
+            .WithButton(
+                "Wiki",
+                style: ButtonStyle.Link,
+                url: BuildChannelUrl(guild, wikiChannel.Id))
+            .Build();
+
+        var embed = new EmbedBuilder()
+            .WithTitle(ChannelGuideEmbedTitle)
+            .WithColor(Color.Teal)
+            .WithDescription("Tóm tắt mục đích từng kênh chính sau khi khởi tạo studio.")
+            .AddField(
+                "Main Hall",
+                $"- <#{onboardingChannel.Id}>: Hướng dẫn thành viên mới\n" +
+                $"- <#{wikiChannel.Id}>: Tài liệu dự án\n" +
+                $"- <#{roleSelectionChannel.Id}>: Nhận role bằng reaction\n" +
+                $"- <#{shopChannel.Id}>: Mua role bằng XP",
+                false)
+            .AddField(
+                "Project A",
+                $"- <#{dashboardChannel.Id}>: Trạng thái sprint và bảng điều phối\n" +
+                $"- <#{backlogChannel.Id}>: Nơi thêm task tồn đọng\n" +
+                $"- <#{projectGeneralChannel.Id}>: Trao đổi công việc chung\n" +
+                $"- <#{artShowcaseChannel.Id}>: Showcase art và góp ý\n" +
+                $"- <#{devTalkChannel.Id}>: Trao đổi kỹ thuật\n" +
+                $"- <#{bugsChannel.Id}>: Theo dõi và xử lý bug",
+                false)
+            .AddField(
+                "Bot Zone",
+                $"- <#{standupChannel.Id}>: Báo cáo hằng ngày\n" +
+                $"- <#{githubCommitsChannel.Id}>: Log commit GitHub\n" +
+                $"- <#{globalTaskFeedChannel.Id}>: Thông báo task toàn cục",
+                false)
+            .Build();
+
+        if (existingMessage is null)
+        {
+            await guideChannel.SendMessageAsync(embed: embed, components: components);
+            return;
+        }
+
+        await existingMessage.ModifyAsync(props =>
+        {
+            props.Embed = embed;
+            props.Components = components;
+        });
+    }
+
+    private static MessageComponent BuildShopPanelComponents()
+    {
+        return new ComponentBuilder()
+            .WithButton("Xem diem", "shop:balance", ButtonStyle.Secondary)
+            .WithButton("Mua VIP Gold", "shop:buy:vip-gold", ButtonStyle.Success)
+            .WithButton("Mua Diamond", "shop:buy:diamond-member", ButtonStyle.Primary)
+            .WithButton("Mua Mythic", "shop:buy:mythic-core", ButtonStyle.Danger)
+            .WithButton("Lam moi", "shop:refresh", ButtonStyle.Secondary)
+            .Build();
+    }
+
+    private static string BuildChannelUrl(SocketGuild guild, ulong channelId)
+    {
+        return $"https://discord.com/channels/{guild.Id}/{channelId}";
     }
 
     private async Task ConfigureCommandLogsPermissionsAsync(SocketGuild guild, ITextChannel commandLogs, IRole leadRole)
