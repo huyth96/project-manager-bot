@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Data;
 using ProjectManagerBot.Models;
 
@@ -28,6 +28,7 @@ public sealed class AutomationService(
             {
                 await TryRunStandupPromptAsync(stoppingToken);
                 await TryRunOverdueTaskReminderAsync(stoppingToken);
+                await TryRunSprintAutoCloseAsync(stoppingToken);
                 await timer.WaitForNextTickAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -36,7 +37,7 @@ public sealed class AutomationService(
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Automation loop failed");
+                _logger.LogError(ex, "Vòng lặp tự động hóa gặp lỗi");
             }
         }
     }
@@ -63,7 +64,7 @@ public sealed class AutomationService(
             if (result.MessageId.HasValue)
             {
                 _logger.LogInformation(
-                    "Posted standup prompt for project {ProjectId} at {LocalDate}",
+                    "Đã gửi nhắc báo cáo ngày cho dự án {ProjectId} vào {LocalDate}",
                     project.Id,
                     result.LocalDate);
             }
@@ -115,6 +116,73 @@ public sealed class AutomationService(
 
         await db.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Sent {Count} overdue task reminder(s)", overdueTasks.Count);
+        _logger.LogInformation("Đã gửi {Count} thông báo nhắc quá hạn", overdueTasks.Count);
+    }
+
+    private async Task TryRunSprintAutoCloseAsync(CancellationToken cancellationToken)
+    {
+        var localNow = _studioTime.LocalNow;
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var activeSprints = await db.Sprints
+            .Where(x => x.IsActive && x.EndDateLocal.HasValue)
+            .OrderBy(x => x.ProjectId)
+            .ThenBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        if (activeSprints.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var sprint in activeSprints)
+        {
+            var endLocal = sprint.EndDateLocal!.Value;
+            // Backward-compatible: nếu mốc thời gian chỉ là ngày (00:00), coi hạn chót là cuối ngày.
+            var effectiveEnd = endLocal.TimeOfDay == TimeSpan.Zero
+                ? endLocal.Date.AddDays(1).AddTicks(-1)
+                : endLocal;
+
+            if (localNow.DateTime < effectiveEnd)
+            {
+                continue;
+            }
+
+            var sprintTasks = await db.TaskItems
+                .Where(x => x.ProjectId == sprint.ProjectId && x.SprintId == sprint.Id)
+                .ToListAsync(cancellationToken);
+
+            var doneTasks = sprintTasks.Where(x => x.Status == TaskItemStatus.Done).ToList();
+            var unfinishedTasks = sprintTasks.Where(x => x.Status != TaskItemStatus.Done).ToList();
+            var velocity = doneTasks.Sum(x => x.Points);
+
+            foreach (var task in unfinishedTasks)
+            {
+                task.SprintId = null;
+                task.Status = TaskItemStatus.Backlog;
+                task.AssigneeId = null;
+            }
+
+            sprint.IsActive = false;
+            sprint.EndedAtUtc = DateTimeOffset.UtcNow;
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            await _projectService.RefreshDashboardMessageAsync(sprint.ProjectId, cancellationToken);
+            await _notificationService.NotifySprintEndedAsync(
+                sprint.ProjectId,
+                actorDiscordId: 0,
+                sprint,
+                velocity,
+                doneTasks.Count,
+                unfinishedTasks.Count,
+                cancellationToken);
+
+            _logger.LogInformation(
+                "Tự động đóng chu kỳ {SprintId} của dự án {ProjectId} tại {LocalNow}",
+                sprint.Id,
+                sprint.ProjectId,
+                localNow);
+        }
     }
 }

@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Models;
 
 namespace ProjectManagerBot.Data;
@@ -10,6 +10,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<TaskItem> TaskItems => Set<TaskItem>();
     public DbSet<User> Users => Set<User>();
     public DbSet<StandupReport> StandupReports => Set<StandupReport>();
+    public DbSet<GitHubRepoBinding> GitHubRepoBindings => Set<GitHubRepoBinding>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -18,6 +19,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             entity.HasIndex(x => x.ChannelId).IsUnique();
             entity.HasIndex(x => x.BugChannelId);
             entity.HasIndex(x => x.StandupChannelId);
+            entity.HasIndex(x => x.GitHubCommitsChannelId);
             entity.HasIndex(x => x.GlobalNotificationChannelId);
             entity.Property(x => x.Name).HasMaxLength(128);
         });
@@ -66,6 +68,18 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
 
             entity.HasIndex(x => new { x.ProjectId, x.LocalDate, x.DiscordUserId }).IsUnique();
 
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<GitHubRepoBinding>(entity =>
+        {
+            entity.Property(x => x.RepoFullName).HasMaxLength(200);
+            entity.Property(x => x.Branch).HasMaxLength(100);
+            entity.Property(x => x.LastSeenCommitSha).HasMaxLength(100);
+            entity.HasIndex(x => new { x.ProjectId, x.RepoFullName, x.Branch }).IsUnique();
             entity.HasOne(x => x.Project)
                 .WithMany()
                 .HasForeignKey(x => x.ProjectId)

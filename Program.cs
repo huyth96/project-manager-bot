@@ -1,4 +1,4 @@
-using Discord;
+﻿using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +12,7 @@ var builder = Host.CreateApplicationBuilder(args);
 ApplyEnvironmentOverrides(builder.Configuration);
 
 builder.Services.Configure<DiscordBotOptions>(builder.Configuration.GetSection("Discord"));
+builder.Services.Configure<GitHubTrackingOptions>(builder.Configuration.GetSection("GitHub"));
 
 builder.Services.AddDbContextFactory<BotDbContext>(options =>
 {
@@ -43,9 +44,16 @@ builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddHttpClient("GitHubTracking", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("ProjectManagerBot/1.0");
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
+builder.Services.AddSingleton<GitHubTrackingService>();
 
 builder.Services.AddHostedService<DiscordBotService>();
 builder.Services.AddHostedService<AutomationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GitHubTrackingService>());
 
 var host = builder.Build();
 
@@ -55,9 +63,11 @@ await using (var scope = host.Services.CreateAsyncScope())
     await using var db = await dbFactory.CreateDbContextAsync();
     await db.Database.EnsureCreatedAsync();
     await EnsureColumnAsync(db, "Projects", "GlobalNotificationChannelId", "INTEGER NULL");
+    await EnsureColumnAsync(db, "Projects", "GitHubCommitsChannelId", "INTEGER NULL");
     await EnsureColumnAsync(db, "TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "StartDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "EndDateLocal", "TEXT NULL");
+    await EnsureGitHubRepoBindingsTableAsync(db);
 }
 
 await host.RunAsync();
@@ -92,6 +102,30 @@ static void ApplyEnvironmentOverrides(ConfigurationManager configuration)
     if (!string.IsNullOrWhiteSpace(botDbConnectionStringFromEnv))
     {
         configuration["ConnectionStrings:BotDb"] = botDbConnectionStringFromEnv.Trim();
+    }
+
+    var gitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+    if (!string.IsNullOrWhiteSpace(gitHubToken))
+    {
+        configuration["GitHub:Token"] = gitHubToken.Trim();
+    }
+
+    var gitHubPollIntervalRaw = Environment.GetEnvironmentVariable("GITHUB_POLL_INTERVAL_SECONDS");
+    if (int.TryParse(gitHubPollIntervalRaw, out var gitHubPollInterval))
+    {
+        configuration["GitHub:PollIntervalSeconds"] = gitHubPollInterval.ToString();
+    }
+
+    var gitHubMaxCommitsPerPollRaw = Environment.GetEnvironmentVariable("GITHUB_MAX_COMMITS_PER_POLL");
+    if (int.TryParse(gitHubMaxCommitsPerPollRaw, out var gitHubMaxCommitsPerPoll))
+    {
+        configuration["GitHub:MaxCommitsPerPoll"] = gitHubMaxCommitsPerPoll.ToString();
+    }
+
+    var gitHubEnabledRaw = Environment.GetEnvironmentVariable("GITHUB_TRACKING_ENABLED");
+    if (bool.TryParse(gitHubEnabledRaw, out var gitHubEnabled))
+    {
+        configuration["GitHub:Enabled"] = gitHubEnabled.ToString();
     }
 }
 
@@ -186,15 +220,34 @@ static async Task EnsureColumnAsync(BotDbContext db, string table, string column
         {
             ("Projects", "GlobalNotificationChannelId", "INTEGER NULL") =>
                 "ALTER TABLE \"Projects\" ADD COLUMN \"GlobalNotificationChannelId\" INTEGER NULL;",
+            ("Projects", "GitHubCommitsChannelId", "INTEGER NULL") =>
+                "ALTER TABLE \"Projects\" ADD COLUMN \"GitHubCommitsChannelId\" INTEGER NULL;",
             ("TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"TaskItems\" ADD COLUMN \"LastOverdueReminderDateLocal\" TEXT NULL;",
             ("Sprints", "StartDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"Sprints\" ADD COLUMN \"StartDateLocal\" TEXT NULL;",
             ("Sprints", "EndDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"Sprints\" ADD COLUMN \"EndDateLocal\" TEXT NULL;",
-            _ => throw new InvalidOperationException("Unsupported schema bootstrap operation.")
+            _ => throw new InvalidOperationException("Thao tác khởi tạo lược đồ không được hỗ trợ.")
         };
 
         await db.Database.ExecuteSqlRawAsync(alterSql);
     }
+}
+
+static async Task EnsureGitHubRepoBindingsTableAsync(BotDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"GitHubRepoBindings\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_GitHubRepoBindings\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"RepoFullName\" TEXT NOT NULL, " +
+        "\"Branch\" TEXT NOT NULL, " +
+        "\"LastSeenCommitSha\" TEXT NULL, " +
+        "\"IsEnabled\" INTEGER NOT NULL DEFAULT 1, " +
+        "CONSTRAINT \"FK_GitHubRepoBindings_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_GitHubRepoBindings_ProjectId_RepoFullName_Branch\" " +
+        "ON \"GitHubRepoBindings\" (\"ProjectId\", \"RepoFullName\", \"Branch\");");
 }

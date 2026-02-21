@@ -1,4 +1,4 @@
-namespace ProjectManagerBot.Models;
+﻿namespace ProjectManagerBot.Models;
 
 public sealed class TaskItem
 {

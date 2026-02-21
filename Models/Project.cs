@@ -1,4 +1,4 @@
-namespace ProjectManagerBot.Models;
+﻿namespace ProjectManagerBot.Models;
 
 public sealed class Project
 {
@@ -8,6 +8,7 @@ public sealed class Project
     public ulong ChannelId { get; set; }
     public ulong BugChannelId { get; set; }
     public ulong StandupChannelId { get; set; }
+    public ulong? GitHubCommitsChannelId { get; set; }
     public ulong? GlobalNotificationChannelId { get; set; }
     public ulong? DashboardMessageId { get; set; }
     public ulong? DailySummaryMessageId { get; set; }

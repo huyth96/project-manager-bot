@@ -1,4 +1,4 @@
-namespace ProjectManagerBot.Options;
+﻿namespace ProjectManagerBot.Options;
 
 public sealed class DiscordBotOptions
 {

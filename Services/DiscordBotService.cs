@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
@@ -25,7 +25,7 @@ public sealed class DiscordBotService(
     {
         if (string.IsNullOrWhiteSpace(_options.Token))
         {
-            throw new InvalidOperationException("Discord token is missing. Set Discord:Token or DISCORD_BOT_TOKEN.");
+            throw new InvalidOperationException("Thiếu token Discord. Hãy cấu hình Discord:Token hoặc DISCORD_BOT_TOKEN.");
         }
 
         _client.Log += OnDiscordLogAsync;
@@ -39,7 +39,7 @@ public sealed class DiscordBotService(
         await _client.LoginAsync(TokenType.Bot, _options.Token);
         await _client.StartAsync();
 
-        _logger.LogInformation("Discord gateway started");
+        _logger.LogInformation("Đã khởi động Discord gateway");
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
@@ -59,15 +59,25 @@ public sealed class DiscordBotService(
 
         _commandsRegistered = true;
 
-        if (_options.RegisterCommandsGlobally || _options.GuildId == 0)
+        if (_options.RegisterCommandsGlobally)
         {
             await _interactionService.RegisterCommandsGloballyAsync(deleteMissing: false);
-            _logger.LogInformation("Registered interaction commands globally");
+            _logger.LogInformation("Đã đăng ký slash command ở phạm vi toàn cục");
             return;
         }
 
-        await _interactionService.RegisterCommandsToGuildAsync(_options.GuildId, deleteMissing: false);
-        _logger.LogInformation("Registered interaction commands to guild {GuildId}", _options.GuildId);
+        if (_options.GuildId != 0)
+        {
+            await _interactionService.RegisterCommandsToGuildAsync(_options.GuildId, deleteMissing: false);
+            _logger.LogInformation("Đã đăng ký slash command cho guild {GuildId}", _options.GuildId);
+            return;
+        }
+
+        foreach (var guild in _client.Guilds)
+        {
+            await _interactionService.RegisterCommandsToGuildAsync(guild.Id, deleteMissing: false);
+            _logger.LogInformation("Đã đăng ký slash command cho guild {GuildId}", guild.Id);
+        }
     }
 
     private async Task OnInteractionCreatedAsync(SocketInteraction interaction)
@@ -78,12 +88,12 @@ public sealed class DiscordBotService(
             var result = await _interactionService.ExecuteCommandAsync(context, _serviceProvider);
             if (!result.IsSuccess && interaction.Type is not InteractionType.ApplicationCommandAutocomplete)
             {
-                _logger.LogWarning("Interaction failed: {Reason}", result.ErrorReason);
+                _logger.LogWarning("Interaction lỗi: {Reason}", result.ErrorReason);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to execute interaction");
+            _logger.LogError(ex, "Không thể xử lý interaction");
         }
     }
 
@@ -109,7 +119,7 @@ public sealed class DiscordBotService(
             return;
         }
 
-        var threadNameBase = string.IsNullOrWhiteSpace(message.Content) ? "Showcase Discussion" : message.Content;
+        var threadNameBase = string.IsNullOrWhiteSpace(message.Content) ? "Thảo luận showcase" : message.Content;
         var threadName = threadNameBase.Length > 90 ? threadNameBase[..90] : threadNameBase;
 
         try
@@ -121,7 +131,7 @@ public sealed class DiscordBotService(
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to auto-create showcase thread for message {MessageId}", message.Id);
+            _logger.LogWarning(ex, "Không thể tự tạo thread showcase cho message {MessageId}", message.Id);
         }
     }
 

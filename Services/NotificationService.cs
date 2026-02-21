@@ -31,12 +31,12 @@ public sealed class NotificationService(
         await SendAsync(
             projectId,
             new EmbedBuilder()
-                .WithTitle("📯 Sứ Giả Báo Tin • Nhận Quest")
+                .WithTitle("📯 Sứ Giả Báo Tin • Nhận Nhiệm Vụ")
                 .WithColor(Color.DarkBlue)
                 .WithDescription(
                     "⚔️ Cập Nhật Chiến Trường\n" +
                     $"**Người nhận:** <@{actorDiscordId}>\n" +
-                    $"**Số quest:** `{tasks.Count}`\n" +
+                    $"**Số nhiệm vụ:** `{tasks.Count}`\n" +
                     "━━━━━━━━━━━━━━━━━━━━\n" +
                     "📜 Danh sách\n" +
                     BuildTaskList(tasks))
@@ -60,12 +60,12 @@ public sealed class NotificationService(
         await SendAsync(
             projectId,
             new EmbedBuilder()
-                .WithTitle("🏆 Sứ Giả Báo Tin • Hoàn Thành Quest")
+                .WithTitle("🏆 Sứ Giả Báo Tin • Hoàn Thành Nhiệm Vụ")
                 .WithColor(Color.DarkGreen)
                 .WithDescription(
                     "🛡️ Thành Tích Mới\n" +
                     $"**Người hoàn thành:** <@{actorDiscordId}>\n" +
-                    $"**Số quest:** `{tasks.Count}`\n" +
+                    $"**Số nhiệm vụ:** `{tasks.Count}`\n" +
                     $"**XP nhận được:** `+{awardedXp}`\n" +
                     "━━━━━━━━━━━━━━━━━━━━\n" +
                     "📜 Danh sách\n" +
@@ -92,10 +92,10 @@ public sealed class NotificationService(
                     $"- **Giao bởi:** <@{assignedByDiscordId}>\n" +
                     $"- **Người nhận:** <@{assigneeDiscordId}>\n" +
                     "━━━━━━━━━━━━━━━━━━━━\n" +
-                    $"📌 Quest #{task.Id}\n" +
+                    $"📌 Nhiệm vụ #{task.Id}\n" +
                     $"- **Tên:** **{task.Title}**\n" +
                     $"- **Điểm:** `{task.Points}`\n" +
-                    $"- **Trạng thái:** `{task.Status}`")
+                    $"- **Trạng thái:** `{GetStatusLabel(task.Status)}`")
                 .WithCurrentTimestamp()
                 .Build(),
             cancellationToken);
@@ -116,10 +116,10 @@ public sealed class NotificationService(
                 .WithColor(Color.DarkOrange)
                 .WithDescription(
                     "🚨 Nhiệm vụ quá hạn\n" +
-                    $"📌 Quest #{task.Id}\n" +
+                    $"📌 Nhiệm vụ #{task.Id}\n" +
                     $"- **Quá hạn:** `{overdueHours}h`\n" +
                     $"- **Tên:** **{task.Title}**\n" +
-                    $"- **Trạng thái:** `{task.Status}`\n" +
+                    $"- **Trạng thái:** `{GetStatusLabel(task.Status)}`\n" +
                     $"- **Người xử lý:** {(task.AssigneeId.HasValue ? $"<@{task.AssigneeId.Value}>" : "`Chưa có`")}\n\n" +
                     "> ⚠️ Vui lòng cập nhật tiến độ hoặc đóng nhiệm vụ ngay.")
                 .WithCurrentTimestamp()
@@ -133,8 +133,10 @@ public sealed class NotificationService(
         Sprint sprint,
         CancellationToken cancellationToken = default)
     {
-        var startText = sprint.StartDateLocal?.ToString("yyyy-MM-dd") ?? "N/A";
-        var endText = sprint.EndDateLocal?.ToString("yyyy-MM-dd") ?? "N/A";
+        var actorText = FormatActor(actorDiscordId);
+        var startText = FormatSprintMoment(sprint.StartDateLocal);
+        var endText = FormatSprintMoment(sprint.EndDateLocal);
+        var sprintGoal = string.IsNullOrWhiteSpace(sprint.Goal) ? "Chưa đặt mục tiêu" : sprint.Goal;
 
         await SendAsync(
             projectId,
@@ -142,10 +144,10 @@ public sealed class NotificationService(
                 .WithTitle("🚩 Khởi Chạy Chiến Dịch Mới")
                 .WithColor(Color.DarkPurple)
                 .WithDescription(
-                    "⚔️ Sprint Đã Bắt Đầu\n" +
-                    $"- **Kích hoạt bởi:** <@{actorDiscordId}>\n" +
-                    $"- **Tên sprint:** **{sprint.Name}**\n" +
-                    $"- **Mục tiêu:** **{sprint.Goal}**\n" +
+                    "⚔️ Chu Kỳ Đã Bắt Đầu\n" +
+                    $"- **Kích hoạt bởi:** {actorText}\n" +
+                    $"- **Tên chu kỳ:** **{sprint.Name}**\n" +
+                    $"- **Mục tiêu:** **{sprintGoal}**\n" +
                     $"- **Thời gian:** `{startText} -> {endText}`")
                 .WithCurrentTimestamp()
                 .Build(),
@@ -161,8 +163,9 @@ public sealed class NotificationService(
         int rolledBackCount,
         CancellationToken cancellationToken = default)
     {
-        var startText = sprint.StartDateLocal?.ToString("yyyy-MM-dd") ?? "N/A";
-        var endText = sprint.EndDateLocal?.ToString("yyyy-MM-dd") ?? "N/A";
+        var actorText = FormatActor(actorDiscordId);
+        var startText = FormatSprintMoment(sprint.StartDateLocal);
+        var endText = FormatSprintMoment(sprint.EndDateLocal);
 
         await SendAsync(
             projectId,
@@ -170,13 +173,13 @@ public sealed class NotificationService(
                 .WithTitle("🏁 Đóng Chiến Dịch")
                 .WithColor(Color.Orange)
                 .WithDescription(
-                    "📊 Tổng kết sprint\n" +
-                    $"- **Thực hiện bởi:** <@{actorDiscordId}>\n" +
-                    $"- **Sprint:** **{sprint.Name}**\n" +
+                    "📊 Tổng kết chu kỳ\n" +
+                    $"- **Thực hiện bởi:** {actorText}\n" +
+                    $"- **Chu kỳ:** **{sprint.Name}**\n" +
                     $"- **Thời gian:** `{startText} -> {endText}`\n" +
-                    $"- **Velocity:** `{velocity}`\n" +
+                    $"- **Vận tốc:** `{velocity}`\n" +
                     $"- **Hoàn thành:** `{completedCount}`\n" +
-                    $"- **Trả về backlog:** `{rolledBackCount}`")
+                    $"- **Trả về tồn đọng:** `{rolledBackCount}`")
                 .WithCurrentTimestamp()
                 .Build(),
             cancellationToken);
@@ -194,7 +197,7 @@ public sealed class NotificationService(
         var channel = await ResolveGlobalChannelAsync(db, project, cancellationToken);
         if (channel is null)
         {
-            _logger.LogWarning("Global task feed channel missing for project {ProjectId}", projectId);
+            _logger.LogWarning("Thiếu kênh thông báo toàn cục cho dự án {ProjectId}", projectId);
             return;
         }
 
@@ -255,10 +258,40 @@ public sealed class NotificationService(
         var text = string.Join("\n", lines);
         if (tasks.Count > preview.Count)
         {
-            text += $"\n- ...và `{tasks.Count - preview.Count}` quest khác";
+            text += $"\n- ...và `{tasks.Count - preview.Count}` nhiệm vụ khác";
         }
 
         return text;
+    }
+
+    private static string GetStatusLabel(TaskItemStatus status)
+    {
+        return status switch
+        {
+            TaskItemStatus.Backlog => "Tồn đọng",
+            TaskItemStatus.Todo => "Cần làm",
+            TaskItemStatus.InProgress => "Đang làm",
+            TaskItemStatus.Done => "Hoàn thành",
+            _ => "Không xác định"
+        };
+    }
+
+    private static string FormatActor(ulong actorDiscordId)
+    {
+        return actorDiscordId == 0 ? "`Hệ thống`" : $"<@{actorDiscordId}>";
+    }
+
+    private static string FormatSprintMoment(DateTime? value)
+    {
+        if (!value.HasValue)
+        {
+            return "Chưa đặt";
+        }
+
+        var date = value.Value;
+        return date.TimeOfDay == TimeSpan.Zero
+            ? date.ToString("yyyy-MM-dd")
+            : date.ToString("yyyy-MM-dd HH:mm");
     }
 }
 

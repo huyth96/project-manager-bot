@@ -20,10 +20,10 @@ public sealed class ProjectService(
     public static MessageComponent BuildDashboardComponents()
     {
         return new ComponentBuilder()
-            .WithButton("📜 Backlog", "dashboard:add_backlog", ButtonStyle.Secondary)
+            .WithButton("📜 Tồn Đọng", "dashboard:add_backlog", ButtonStyle.Secondary)
             .WithButton("🧙 Nhiệm Vụ Của Tôi", "dashboard:my_tasks", ButtonStyle.Primary)
-            .WithButton("🐞 Báo Bug", "dashboard:report_bug", ButtonStyle.Danger)
-            .WithButton("🗺️ Quest Board", "dashboard:view_board", ButtonStyle.Secondary)
+            .WithButton("🐞 Báo Lỗi", "dashboard:report_bug", ButtonStyle.Danger)
+            .WithButton("🗺️ Bảng Nhiệm Vụ", "dashboard:view_board", ButtonStyle.Secondary)
             .WithButton("👑 Bảng Điều Phối", "dashboard:admin_panel", ButtonStyle.Success)
             .Build();
     }
@@ -33,6 +33,7 @@ public sealed class ProjectService(
         ulong channelId,
         ulong bugChannelId,
         ulong standupChannelId,
+        ulong? githubCommitsChannelId = null,
         ulong? globalNotificationChannelId = null,
         CancellationToken cancellationToken = default)
     {
@@ -47,6 +48,7 @@ public sealed class ProjectService(
                 ChannelId = channelId,
                 BugChannelId = bugChannelId,
                 StandupChannelId = standupChannelId,
+                GitHubCommitsChannelId = githubCommitsChannelId,
                 GlobalNotificationChannelId = globalNotificationChannelId
             };
 
@@ -57,6 +59,7 @@ public sealed class ProjectService(
             project.Name = name;
             project.BugChannelId = bugChannelId;
             project.StandupChannelId = standupChannelId;
+            project.GitHubCommitsChannelId = githubCommitsChannelId ?? project.GitHubCommitsChannelId;
             project.GlobalNotificationChannelId = globalNotificationChannelId ?? project.GlobalNotificationChannelId;
         }
 
@@ -70,8 +73,24 @@ public sealed class ProjectService(
         return await db.Projects
             .AsNoTracking()
             .FirstOrDefaultAsync(
-                x => x.ChannelId == channelId || x.BugChannelId == channelId || x.StandupChannelId == channelId,
+                x => x.ChannelId == channelId ||
+                     x.BugChannelId == channelId ||
+                     x.StandupChannelId == channelId ||
+                     x.GitHubCommitsChannelId == channelId,
                 cancellationToken);
+    }
+
+    public async Task SetGitHubCommitsChannelAsync(int projectId, ulong channelId, CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var project = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId, cancellationToken);
+        if (project is null)
+        {
+            return;
+        }
+
+        project.GitHubCommitsChannelId = channelId;
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<Project?> GetProjectByIdAsync(int projectId, CancellationToken cancellationToken = default)
@@ -107,7 +126,7 @@ public sealed class ProjectService(
         var channel = _client.GetChannel(project.ChannelId) as ITextChannel;
         if (channel is null)
         {
-            _logger.LogWarning("Dashboard channel {ChannelId} not found for project {ProjectId}", project.ChannelId, projectId);
+            _logger.LogWarning("Không tìm thấy kênh bảng điều phối {ChannelId} của dự án {ProjectId}", project.ChannelId, projectId);
             return;
         }
 
@@ -221,7 +240,7 @@ public sealed class ProjectService(
         {
             properties.Embed = embed;
             properties.Components = new ComponentBuilder()
-                .WithButton("🧾 Nộp Standup", $"standup:report:{projectId}", ButtonStyle.Primary)
+                .WithButton("🧾 Nộp Báo Cáo Ngày", $"standup:report:{projectId}", ButtonStyle.Primary)
                 .Build();
         });
     }
@@ -240,7 +259,7 @@ public sealed class ProjectService(
         var standupChannel = _client.GetChannel(project.StandupChannelId) as ITextChannel;
         if (standupChannel is null)
         {
-            _logger.LogWarning("Standup channel {ChannelId} not found for project {ProjectId}", project.StandupChannelId, projectId);
+            _logger.LogWarning("Không tìm thấy kênh báo cáo ngày {ChannelId} của dự án {ProjectId}", project.StandupChannelId, projectId);
             return (null, _studioTime.LocalDate);
         }
 
@@ -250,7 +269,7 @@ public sealed class ProjectService(
         var message = await standupChannel.SendMessageAsync(
             embed: summaryEmbed,
             components: new ComponentBuilder()
-                .WithButton("🧾 Nộp Standup", $"standup:report:{projectId}", ButtonStyle.Primary)
+                .WithButton("🧾 Nộp Báo Cáo Ngày", $"standup:report:{projectId}", ButtonStyle.Primary)
                 .Build());
 
         project.DailySummaryMessageId = message.Id;
@@ -337,30 +356,31 @@ public sealed class ProjectService(
             cancellationToken);
 
         var sprintWindow = activeSprint?.StartDateLocal.HasValue == true && activeSprint.EndDateLocal.HasValue
-            ? $"{activeSprint.StartDateLocal:yyyy-MM-dd} -> {activeSprint.EndDateLocal:yyyy-MM-dd} (UTC+7)"
+            ? $"{FormatSprintMoment(activeSprint.StartDateLocal)} -> {FormatSprintMoment(activeSprint.EndDateLocal)} (UTC+7)"
             : "Chưa thiết lập";
+        var sprintGoal = string.IsNullOrWhiteSpace(activeSprint?.Goal) ? "Chưa đặt mục tiêu" : activeSprint.Goal;
 
         var activeQuestline = activeSprint is null
-            ? "🛌 Chưa có sprint đang chạy\n\n> ⚠️ Lead/Admin hãy vào **Bảng Điều Phối** để bắt đầu sprint."
-            : "⚔️ Sprint đang chạy\n\n" +
-              $"- **Tên sprint:** `{activeSprint.Name}`\n" +
-              $"- **Mục tiêu:** **{activeSprint.Goal}**\n" +
+            ? "🛌 Chưa có chu kỳ nào đang chạy\n\n> ⚠️ Trưởng nhóm/Quản trị hãy vào **Bảng Điều Phối** để bắt đầu chu kỳ."
+            : "⚔️ Chu kỳ đang chạy\n\n" +
+              $"- **Tên chu kỳ:** `{activeSprint.Name}`\n" +
+              $"- **Mục tiêu:** **{sprintGoal}**\n" +
               $"- **Thời gian:** `{sprintWindow}`";
 
         var resourceSnapshot =
-            "- **Backlog:** " + $"`{backlogCount}`\n" +
-            "- **Bug đang mở:** " + $"`{bugOpenCount}`\n" +
+            "- **Tồn đọng:** " + $"`{backlogCount}`\n" +
+            "- **Lỗi đang mở:** " + $"`{bugOpenCount}`\n" +
             "- **Đã hoàn thành:** " + $"`{doneTasks}`/`{Math.Max(totalTasks, 0)}`";
 
         const string missionFlow =
-            "- **1.** Thêm việc vào **Backlog**\n" +
-            "- **2.** Lead/Admin mở **Bảng Điều Phối** và bắt đầu sprint\n" +
-            "- **3.** Team nhận việc trong **Quest Board**\n" +
-            "- **4.** Kết thúc sprint để chốt velocity";
+            "- **1.** Thêm việc vào **Tồn Đọng**\n" +
+            "- **2.** Trưởng nhóm/Quản trị mở **Bảng Điều Phối** và bắt đầu chu kỳ\n" +
+            "- **3.** Nhóm nhận việc trong **Bảng Nhiệm Vụ**\n" +
+            "- **4.** Kết thúc chu kỳ để chốt vận tốc";
 
         const string accessGrid =
-            "- **Lead/Admin**: bắt đầu sprint, kết thúc sprint, giao nhiệm vụ\n" +
-            "- **Thành viên**: nhận việc, cập nhật tiến độ, báo/sửa bug";
+            "- **Trưởng nhóm/Quản trị**: bắt đầu chu kỳ, kết thúc chu kỳ, giao nhiệm vụ\n" +
+            "- **Thành viên**: nhận việc, cập nhật tiến độ, báo/sửa lỗi";
 
         var builder = new EmbedBuilder()
             .WithTitle($"🏰 Đại Sảnh Dự Án • {project.Name}")
@@ -368,14 +388,14 @@ public sealed class ProjectService(
             .WithDescription(
                 "🎮 Tổng Quan\n" +
                 $"**Chế độ:** `{(activeSprint is null ? "Nghỉ giữa chiến dịch" : "Đang hành quân")}`\n" +
-                $"**Project ID:** `{project.Id}`\n" +
+                $"**Mã dự án:** `{project.Id}`\n" +
                 "━━━━━━━━━━━━━━━━━━━━")
             .WithCurrentTimestamp()
-            .AddField("🛡️ Tình Hình Sprint", activeQuestline, false)
+            .AddField("🛡️ Tình Hình Chu Kỳ", activeQuestline, false)
             .AddField("📈 Tiến Độ Chiến Dịch", BuildProgressLine(totalTasks, doneTasks), false)
             .AddField("🎒 Tài Nguyên Hiện Có", resourceSnapshot, true)
             .AddField("🧭 Luồng Xử Lý", missionFlow, true)
-            .AddField("👑 Phân Quyền", accessGrid + "\n\n> ⚠️ Chỉ Lead/Admin mới được Start/End sprint.", false);
+            .AddField("👑 Phân Quyền", accessGrid + "\n\n> ⚠️ Chỉ Trưởng nhóm/Quản trị mới được bắt đầu/kết thúc chu kỳ.", false);
 
         return builder.Build();
     }
@@ -397,7 +417,7 @@ public sealed class ProjectService(
             .ToList();
 
         var summaryLines = reports.Count == 0
-            ? "📣 Chưa có báo cáo standup\n\n> ⚠️ Hãy bấm **Nộp Standup** trước 09:30 (UTC+7)."
+            ? "📣 Chưa có báo cáo hằng ngày\n\n> ⚠️ Hãy bấm **Nộp Báo Cáo Ngày** trước 09:30 (UTC+7)."
             : string.Join(
                 "\n\n━━━━━━━━━━━━━━━━━━━━\n\n",
                 reports.Select((x, i) =>
@@ -407,13 +427,26 @@ public sealed class ProjectService(
                     $"- **Vướng mắc:** {x.Blockers}"));
 
         return new EmbedBuilder()
-            .WithTitle($"🛡️ Nhật Ký Standup • {project.Name}")
+            .WithTitle($"🛡️ Nhật Ký Báo Cáo Ngày • {project.Name}")
             .WithColor(Color.DarkBlue)
             .AddField("📅 Ngày", $"{localDate:yyyy-MM-dd} (UTC+7)", true)
             .AddField("👥 Số báo cáo", reports.Count.ToString(), true)
             .WithDescription(summaryLines)
             .WithCurrentTimestamp()
             .Build();
+    }
+
+    private static string FormatSprintMoment(DateTime? value)
+    {
+        if (!value.HasValue)
+        {
+            return "Chưa đặt";
+        }
+
+        var date = value.Value;
+        return date.TimeOfDay == TimeSpan.Zero
+            ? date.ToString("yyyy-MM-dd")
+            : date.ToString("yyyy-MM-dd HH:mm");
     }
 }
 

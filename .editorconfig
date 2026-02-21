@@ -1,0 +1,27 @@
+root = true
+
+[*.cs]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+[*.csproj]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+[*.json]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+[*.md]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true
+
+[*.bat]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+

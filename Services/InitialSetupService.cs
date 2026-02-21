@@ -1,4 +1,4 @@
-using Discord;
+﻿using Discord;
 using Discord.WebSocket;
 
 namespace ProjectManagerBot.Services;
@@ -38,7 +38,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var p1Bugs = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-bugs");
 
         var dailyStandup = await EnsureTextChannelAsync(guild, botZone.Id, "daily-standup");
-        _ = await EnsureTextChannelAsync(guild, botZone.Id, "github-commits");
+        var githubCommits = await EnsureTextChannelAsync(guild, botZone.Id, "github-commits");
         var commandLogs = await EnsureTextChannelAsync(guild, botZone.Id, "command-logs");
         var globalTaskFeed = await EnsureTextChannelAsync(guild, botZone.Id, "global-task-feed");
 
@@ -54,6 +54,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             P1DashboardChannelId = p1Dashboard.Id,
             P1BugsChannelId = p1Bugs.Id,
             DailyStandupChannelId = dailyStandup.Id,
+            GitHubCommitsChannelId = githubCommits.Id,
             CommandLogsChannelId = commandLogs.Id,
             GlobalTaskFeedChannelId = globalTaskFeed.Id,
             DeletedChannelsCount = deletedChannelsCount
@@ -78,11 +79,11 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to delete channel {ChannelId} ({ChannelName})", channel.Id, channel.Name);
+                _logger.LogWarning(ex, "Không thể xóa kênh {ChannelId} ({ChannelName})", channel.Id, channel.Name);
             }
         }
 
-        _logger.LogInformation("Studio reset deleted {DeletedChannelsCount} channel(s) in guild {GuildId}", deleted, guild.Id);
+        _logger.LogInformation("Làm mới studio đã xóa {DeletedChannelsCount} kênh trong guild {GuildId}", deleted, guild.Id);
         return deleted;
     }
 
@@ -151,7 +152,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             guild.CurrentUser,
             new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, manageMessages: PermValue.Allow));
 
-        _logger.LogInformation("Configured dashboard permissions for guild {GuildId}", guild.Id);
+        _logger.LogInformation("Đã cấu hình quyền cho kênh dashboard của guild {GuildId}", guild.Id);
     }
 
     private async Task ConfigureCommandLogsPermissionsAsync(SocketGuild guild, ITextChannel commandLogs, IRole leadRole)
@@ -175,7 +176,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             guild.CurrentUser,
             new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, readMessageHistory: PermValue.Allow));
 
-        _logger.LogInformation("Configured command log privacy for guild {GuildId}", guild.Id);
+        _logger.LogInformation("Đã cấu hình quyền riêng tư kênh nhật ký lệnh cho guild {GuildId}", guild.Id);
     }
 }
 
@@ -184,6 +185,7 @@ public sealed class StudioSetupResult
     public ulong P1DashboardChannelId { get; set; }
     public ulong P1BugsChannelId { get; set; }
     public ulong DailyStandupChannelId { get; set; }
+    public ulong GitHubCommitsChannelId { get; set; }
     public ulong CommandLogsChannelId { get; set; }
     public ulong GlobalTaskFeedChannelId { get; set; }
     public int DeletedChannelsCount { get; set; }
