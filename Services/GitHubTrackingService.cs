@@ -535,7 +535,9 @@ public sealed class GitHubTrackingService(
         }
 
         return guildChannel.Guild.TextChannels.FirstOrDefault(x =>
-            x.Name.Equals(GitHubCommitsChannelName, StringComparison.OrdinalIgnoreCase));
+                   x.Name.Equals(GitHubCommitsChannelName, StringComparison.OrdinalIgnoreCase))
+               ?? guildChannel.Guild.TextChannels.FirstOrDefault(x =>
+                   x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
     }
 
     private static Embed BuildPushEmbed(
