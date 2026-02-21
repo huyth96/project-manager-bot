@@ -17,24 +17,24 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var deletedChannelsCount = await ResetAllChannelsAsync(guild);
 
         var leadRole = await EnsureRoleAsync(guild, "Studio Lead");
-        _ = await EnsureRoleAsync(guild, "Developer");
-        _ = await EnsureRoleAsync(guild, "Artist");
+        var developerRole = await EnsureRoleAsync(guild, "Developer");
+        var artistRole = await EnsureRoleAsync(guild, "Artist");
 
         var mainHall = await EnsureCategoryAsync(guild, MainHallCategory);
         var projectHall = await EnsureCategoryAsync(guild, ProjectCategory);
         var botZone = await EnsureCategoryAsync(guild, BotZoneCategory);
         var meetingHall = await EnsureCategoryAsync(guild, MeetingCategory);
 
-        _ = await EnsureTextChannelAsync(guild, mainHall.Id, "announcements");
-        _ = await EnsureTextChannelAsync(guild, mainHall.Id, "resources-wiki");
-        _ = await EnsureTextChannelAsync(guild, mainHall.Id, "general-chat");
-        _ = await EnsureTextChannelAsync(guild, mainHall.Id, "onboarding");
+        var announcements = await EnsureTextChannelAsync(guild, mainHall.Id, "announcements");
+        var resourcesWiki = await EnsureTextChannelAsync(guild, mainHall.Id, "resources-wiki");
+        var generalChat = await EnsureTextChannelAsync(guild, mainHall.Id, "general-chat");
+        var onboarding = await EnsureTextChannelAsync(guild, mainHall.Id, "onboarding");
 
         var p1Dashboard = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-dashboard");
-        _ = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-backlog");
-        _ = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-general");
-        _ = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-art-showcase");
-        _ = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-dev-talk");
+        var p1Backlog = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-backlog");
+        var p1General = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-general");
+        var p1ArtShowcase = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-art-showcase");
+        var p1DevTalk = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-dev-talk");
         var p1Bugs = await EnsureTextChannelAsync(guild, projectHall.Id, "p1-bugs");
 
         var dailyStandup = await EnsureTextChannelAsync(guild, botZone.Id, "daily-standup");
@@ -42,11 +42,41 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var commandLogs = await EnsureTextChannelAsync(guild, botZone.Id, "command-logs");
         var globalTaskFeed = await EnsureTextChannelAsync(guild, botZone.Id, "global-task-feed");
 
-        _ = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Daily Scrum");
-        _ = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Co-working");
-        _ = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Meeting Room");
+        var dailyScrum = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Daily Scrum");
+        var coWorking = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Co-working");
+        var meetingRoom = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "Meeting Room");
 
         await ConfigureDashboardPermissionsAsync(guild, p1Dashboard, leadRole);
+        await ConfigureMemberVisibilityAsync(
+            guild,
+            leadRole,
+            developerRole,
+            artistRole,
+            importantReadOnlyChannels:
+            [
+                announcements,
+                resourcesWiki,
+                onboarding,
+                p1Dashboard,
+                githubCommits,
+                globalTaskFeed
+            ],
+            teamOnlyTextChannels:
+            [
+                generalChat,
+                p1Backlog,
+                p1General,
+                p1ArtShowcase,
+                p1DevTalk,
+                p1Bugs,
+                dailyStandup
+            ],
+            teamOnlyVoiceChannels:
+            [
+                dailyScrum,
+                coWorking,
+                meetingRoom
+            ]);
         await ConfigureCommandLogsPermissionsAsync(guild, commandLogs, leadRole);
 
         return new StudioSetupResult
@@ -153,6 +183,83 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             new OverwritePermissions(viewChannel: PermValue.Allow, sendMessages: PermValue.Allow, manageMessages: PermValue.Allow));
 
         _logger.LogInformation("Đã cấu hình quyền cho kênh dashboard của guild {GuildId}", guild.Id);
+    }
+
+    private async Task ConfigureMemberVisibilityAsync(
+        SocketGuild guild,
+        IRole leadRole,
+        IRole developerRole,
+        IRole artistRole,
+        IReadOnlyCollection<ITextChannel> importantReadOnlyChannels,
+        IReadOnlyCollection<ITextChannel> teamOnlyTextChannels,
+        IReadOnlyCollection<IVoiceChannel> teamOnlyVoiceChannels)
+    {
+        foreach (var channel in importantReadOnlyChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guild.EveryoneRole,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Allow,
+                    sendMessages: PermValue.Deny,
+                    readMessageHistory: PermValue.Allow));
+        }
+
+        var teamRoles = new[] { leadRole, developerRole, artistRole };
+        foreach (var channel in teamOnlyTextChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guild.EveryoneRole,
+                new OverwritePermissions(viewChannel: PermValue.Deny));
+
+            foreach (var role in teamRoles)
+            {
+                await channel.AddPermissionOverwriteAsync(
+                    role,
+                    new OverwritePermissions(
+                        viewChannel: PermValue.Allow,
+                        sendMessages: PermValue.Allow,
+                        readMessageHistory: PermValue.Allow));
+            }
+
+            await channel.AddPermissionOverwriteAsync(
+                guild.CurrentUser,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Allow,
+                    sendMessages: PermValue.Allow,
+                    manageMessages: PermValue.Allow,
+                    readMessageHistory: PermValue.Allow));
+        }
+
+        foreach (var channel in teamOnlyVoiceChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guild.EveryoneRole,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Deny,
+                    connect: PermValue.Deny,
+                    speak: PermValue.Deny));
+
+            foreach (var role in teamRoles)
+            {
+                await channel.AddPermissionOverwriteAsync(
+                    role,
+                    new OverwritePermissions(
+                        viewChannel: PermValue.Allow,
+                        connect: PermValue.Allow,
+                        speak: PermValue.Allow));
+            }
+
+            await channel.AddPermissionOverwriteAsync(
+                guild.CurrentUser,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Allow,
+                    connect: PermValue.Allow,
+                    speak: PermValue.Allow));
+        }
+
+        _logger.LogInformation(
+            "Đã giới hạn thành viên thường chỉ xem kênh quan trọng trong guild {GuildId}",
+            guild.Id);
     }
 
     private async Task ConfigureCommandLogsPermissionsAsync(SocketGuild guild, ITextChannel commandLogs, IRole leadRole)
