@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Logs
+*.log
+*.err
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / local overrides
+appsettings.Local.json
+secrets.json
+
