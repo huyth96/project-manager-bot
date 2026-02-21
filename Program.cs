@@ -23,6 +23,7 @@ builder.Services.AddDbContextFactory<BotDbContext>(options =>
 builder.Services.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConfig
 {
     GatewayIntents = GatewayIntents.Guilds |
+                     GatewayIntents.GuildMembers |
                      GatewayIntents.GuildMessages |
                      GatewayIntents.GuildMessageReactions |
                      GatewayIntents.GuildVoiceStates,

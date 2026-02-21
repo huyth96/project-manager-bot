@@ -20,6 +20,7 @@ public sealed class DiscordBotService(
     private readonly DiscordBotOptions _options = options.Value;
     private readonly ILogger<DiscordBotService> _logger = logger;
     private const string RoleSelectionChannelSlug = "role-selection";
+    private const string AnnouncementsChannelSlug = "announcements";
     private const string RoleSelectionEmbedTitle = "\U0001F3AD Chọn Vai Trò";
     private static readonly IReadOnlyDictionary<string, string> ReactionRoleMap = new Dictionary<string, string>
     {
@@ -40,6 +41,8 @@ public sealed class DiscordBotService(
         _client.Ready += OnReadyAsync;
         _client.InteractionCreated += OnInteractionCreatedAsync;
         _client.MessageReceived += OnMessageReceivedAsync;
+        _client.UserJoined += OnUserJoinedAsync;
+        _client.UserLeft += OnUserLeftAsync;
         _client.ReactionAdded += OnReactionAddedAsync;
         _client.ReactionRemoved += OnReactionRemovedAsync;
 
@@ -158,6 +161,68 @@ public sealed class DiscordBotService(
         SocketReaction reaction)
     {
         return HandleRoleReactionAsync(cacheableMessage, cacheableChannel, reaction, removeRole: true);
+    }
+
+    private Task OnUserJoinedAsync(SocketGuildUser user)
+    {
+        return SendMemberPresenceLogAsync(
+            guild: user.Guild,
+            user: user,
+            isJoined: true);
+    }
+
+    private Task OnUserLeftAsync(SocketGuild guild, SocketUser user)
+    {
+        return SendMemberPresenceLogAsync(
+            guild: guild,
+            user: user,
+            isJoined: false);
+    }
+
+    private async Task SendMemberPresenceLogAsync(SocketGuild guild, SocketUser user, bool isJoined)
+    {
+        try
+        {
+            if (user.IsBot)
+            {
+                return;
+            }
+
+            var announcementsChannel = guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains(AnnouncementsChannelSlug, StringComparison.OrdinalIgnoreCase));
+            if (announcementsChannel is null)
+            {
+                return;
+            }
+
+            var displayName = user is SocketGuildUser guildUser
+                ? guildUser.DisplayName
+                : user.GlobalName ?? user.Username;
+
+            var embed = new EmbedBuilder()
+                .WithTitle(isJoined ? "👋 Thành viên mới" : "📤 Thành viên rời server")
+                .WithColor(isJoined ? Color.Green : Color.Orange)
+                .WithDescription(
+                    isJoined
+                        ? $"Chào mừng <@{user.Id}> đến với server."
+                        : $"<@{user.Id}> đã rời server.")
+                .AddField("Tên hiển thị", displayName, true)
+                .AddField("User ID", user.Id.ToString(), true)
+                .AddField("Tổng thành viên", guild.MemberCount.ToString(), true)
+                .WithCurrentTimestamp()
+                .Build();
+
+            await announcementsChannel.SendMessageAsync(embed: embed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Không thể ghi log thành viên {Action} cho user {UserId} ở guild {GuildId}",
+                isJoined ? "tham gia" : "rời",
+                user.Id,
+                guild.Id);
+        }
     }
 
     private async Task HandleRoleReactionAsync(
