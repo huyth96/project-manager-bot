@@ -6,7 +6,7 @@ namespace ProjectManagerBot.Services;
 public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
 {
     private const string MainHallCategory = "\U0001F4E2 S\u1EA2NH CH\u00CDNH";
-    private const string ProjectCategory = "\u2694\uFE0F PROJECT A: [GAME NAME]";
+    private const string ProjectCategory = "\u2694\uFE0F Project A: Đồ Án Tốt Nghiệp";
     private const string BotZoneCategory = "\U0001F916 BOT ZONE";
     private const string MeetingCategory = "\U0001F50A H\u1ECCP H\u00C0NH";
 

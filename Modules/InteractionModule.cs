@@ -1,11 +1,14 @@
 ﻿using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Data;
 using ProjectManagerBot.Models;
 using ProjectManagerBot.Services;
 using System.Collections.Concurrent;
+using System.Data;
+using System.Data.Common;
 using System.Globalization;
 
 namespace ProjectManagerBot.Modules;
@@ -44,14 +47,10 @@ public sealed class InteractionModule(
 
         var setupResult = await _initialSetupService.InitializeStudioAsync(Context.Guild);
 
-        await using (var db = await _dbContextFactory.CreateDbContextAsync())
-        {
-            await db.Database.EnsureDeletedAsync();
-            await db.Database.EnsureCreatedAsync();
-        }
+        await ResetDatabaseAsync();
 
         var project = await _projectService.UpsertProjectAsync(
-            name: "PROJECT A: [GAME NAME]",
+            name: "Project A: Đồ Án Tốt Nghiệp",
             channelId: setupResult.P1DashboardChannelId,
             bugChannelId: setupResult.P1BugsChannelId,
             standupChannelId: setupResult.DailyStandupChannelId,
@@ -63,7 +62,7 @@ public sealed class InteractionModule(
         await FollowupAsync(
             $"Đã khởi tạo studio.\n" +
             $"- Số kênh đã xóa: `{setupResult.DeletedChannelsCount}`\n" +
-            "- Cơ sở dữ liệu: `đã reset (xóa + tạo lại)`\n" +
+            "- Cơ sở dữ liệu: `đã reset dữ liệu (không xóa file DB)`\n" +
             $"- Kênh dashboard: <#{setupResult.P1DashboardChannelId}>\n" +
             $"- Kênh lỗi: <#{setupResult.P1BugsChannelId}>\n" +
             $"- Kênh báo cáo ngày: <#{setupResult.DailyStandupChannelId}>\n" +
@@ -71,6 +70,124 @@ public sealed class InteractionModule(
             $"- Kênh thông báo toàn cục: <#{setupResult.GlobalTaskFeedChannelId}>\n" +
             $"- Mã dự án: `{project.Id}`",
             ephemeral: true);
+    }
+
+    private async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
+    {
+        const int maxAttempts = 10;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                await db.Database.EnsureCreatedAsync(cancellationToken);
+
+                await using var connection = db.Database.GetDbConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                {
+                    await connection.OpenAsync(cancellationToken);
+                }
+
+                var foreignKeysDisabled = false;
+                try
+                {
+                    await ExecuteNonQueryAsync(connection, null, "PRAGMA foreign_keys = OFF;", cancellationToken);
+                    foreignKeysDisabled = true;
+
+                    await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+                    try
+                    {
+                        var tableNames = new List<string>();
+                        await using (var readTablesCommand = connection.CreateCommand())
+                        {
+                            readTablesCommand.Transaction = transaction;
+                            readTablesCommand.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';";
+
+                            await using var reader = await readTablesCommand.ExecuteReaderAsync(cancellationToken);
+                            while (await reader.ReadAsync(cancellationToken))
+                            {
+                                if (!reader.IsDBNull(0))
+                                {
+                                    tableNames.Add(reader.GetString(0));
+                                }
+                            }
+                        }
+
+                        foreach (var tableName in tableNames)
+                        {
+                            var escapedTableName = tableName.Replace("\"", "\"\"");
+                            await ExecuteNonQueryAsync(connection, transaction, $"DELETE FROM \"{escapedTableName}\";", cancellationToken);
+                        }
+
+                        var hasSqliteSequence = false;
+                        await using (var sequenceCheckCommand = connection.CreateCommand())
+                        {
+                            sequenceCheckCommand.Transaction = transaction;
+                            sequenceCheckCommand.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';";
+
+                            var scalar = await sequenceCheckCommand.ExecuteScalarAsync(cancellationToken);
+                            if (scalar is not null && scalar != DBNull.Value)
+                            {
+                                hasSqliteSequence = Convert.ToInt64(scalar, CultureInfo.InvariantCulture) > 0;
+                            }
+                        }
+
+                        if (hasSqliteSequence)
+                        {
+                            await ExecuteNonQueryAsync(connection, transaction, "DELETE FROM sqlite_sequence;", cancellationToken);
+                        }
+
+                        await transaction.CommitAsync(cancellationToken);
+                    }
+                    catch
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        throw;
+                    }
+                }
+                finally
+                {
+                    if (foreignKeysDisabled)
+                    {
+                        try
+                        {
+                            await ExecuteNonQueryAsync(connection, null, "PRAGMA foreign_keys = ON;", cancellationToken);
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+
+                return;
+            }
+            catch (SqliteException ex) when ((ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6) && attempt < maxAttempts)
+            {
+                var delay = TimeSpan.FromMilliseconds(300 * attempt);
+                _logger.LogWarning(
+                    ex,
+                    "SQLite dang ban trong luc reset studio-init. Thu lai lan {Attempt}/{MaxAttempts} sau {DelayMs}ms.",
+                    attempt,
+                    maxAttempts,
+                    delay.TotalMilliseconds);
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException("Khong the reset co so du lieu vi SQLite dang bi khoa.");
+    }
+
+    private static async Task ExecuteNonQueryAsync(
+        DbConnection connection,
+        DbTransaction? transaction,
+        string commandText,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     [ComponentInteraction("dashboard:add_backlog", true)]
@@ -2393,8 +2510,6 @@ public sealed class StandupReportModal : IModal
     [ModalTextInput("standup_blockers", TextInputStyle.Paragraph, maxLength: 1200)]
     public string Blockers { get; set; } = "Không có";
 }
-
-
 
 
 
