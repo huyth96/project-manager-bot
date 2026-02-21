@@ -71,7 +71,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             guild,
             mainHall.Id,
             ShopChannelName,
-            "Mua role bằng XP bằng button hoặc slash command /shop.");
+            "Mua role bằng XP bằng nút bấm hoặc slash command /shop.");
 
         var p1Dashboard = await EnsureTextChannelAsync(
             guild,
@@ -444,11 +444,11 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
 
         var components = new ComponentBuilder()
             .WithButton(
-                "Huong dan bat dau",
+                "Hướng dẫn bắt đầu",
                 style: ButtonStyle.Link,
                 url: BuildChannelUrl(guild, onboardingChannel.Id))
             .WithButton(
-                "Mo cua hang role",
+                "Mở cửa hàng role",
                 style: ButtonStyle.Link,
                 url: BuildChannelUrl(guild, shopChannel.Id))
             .Build();
@@ -468,7 +468,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 "Dành cho thành viên tập trung art, showcase và feedback hình ảnh.",
                 true)
             .AddField(
-                "Luu y",
+                "Lưu ý",
                 "Bot cần quyền `Manage Roles` và role bot phải đứng trên các role thành viên.",
                 false)
             .Build();
@@ -523,7 +523,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 style: ButtonStyle.Link,
                 url: BuildChannelUrl(guild, wikiChannel.Id))
             .WithButton(
-                "Chon vai tro",
+                "Chọn vai trò",
                 style: ButtonStyle.Link,
                 url: BuildChannelUrl(guild, roleSelectionChannel.Id))
             .WithButton(
@@ -542,23 +542,23 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             .WithDescription(
                 "Chào mừng bạn đến với studio. Làm theo các bước sau để bắt đầu nhanh.")
             .AddField(
-                "1) Doc tai lieu",
+                "1) Đọc tài liệu",
                 $"- Mở <#{wikiChannel.Id}> và đọc mục thiết kế chính.",
                 false)
             .AddField(
-                "2) Chon vai tro",
+                "2) Chọn vai trò",
                 $"- Vào <#{roleSelectionChannel.Id}> và thả reaction để nhận role.",
                 false)
             .AddField(
-                "3) Theo doi tien do",
+                "3) Theo dõi tiến độ",
                 $"- Xem <#{dashboardChannel.Id}> để nắm sprint và task hiện tại.",
                 false)
             .AddField(
-                "4) Mua role bang point",
-                $"- Mở <#{shopChannel.Id}> và dùng button hoặc lệnh `/shop`.",
+                "4) Mua role bằng point",
+                $"- Mở <#{shopChannel.Id}> và dùng nút bấm hoặc lệnh `/shop`.",
                 false)
             .AddField(
-                "Can ho tro?",
+                "Cần hỗ trợ?",
                 "- Ping `Studio Lead` hoặc admin trong `💬-general-chat`.",
                 false)
             .Build();
@@ -590,7 +590,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
 
         var components = new ComponentBuilder()
             .WithButton(
-                "Mo tai lieu Project A",
+                "Mở tài liệu Project A",
                 style: ButtonStyle.Link,
                 url: ProjectDesignDocsUrl)
             .WithButton(
@@ -644,19 +644,19 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 "Dùng bảng tương tác bên dưới để mua role bằng point (XP).\n" +
                 "Bạn cũng có thể dùng slash command nếu muốn.")
             .AddField(
-                "Role hien co",
+                "Role hiện có",
                 "- `VIP Gold` • `120 XP`\n" +
                 "- `Diamond Member` • `300 XP`\n" +
                 "- `Mythic Core` • `600 XP`",
                 false)
             .AddField(
-                "Lenh thay the",
+                "Lệnh thay thế",
                 "- `/shop view`\n" +
                 "- `/shop balance`\n" +
                 "- `/shop buy`",
                 false)
             .AddField(
-                "Nguon point",
+                "Nguồn point",
                 "XP được cộng khi hoàn thành task/bug trong dự án.",
                 false)
             .Build();
@@ -715,7 +715,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var embed = new EmbedBuilder()
             .WithTitle(ChannelGuideEmbedTitle)
             .WithColor(Color.Teal)
-            .WithDescription("Tóm tắt mục đích từng kênh chính sau khi khởi tạo studio.")
+            .WithDescription("Tóm tắt mục đích từng kênh chính.")
             .AddField(
                 "Main Hall",
                 $"- <#{onboardingChannel.Id}>: Hướng dẫn thành viên mới\n" +
@@ -756,11 +756,11 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
     private static MessageComponent BuildShopPanelComponents()
     {
         return new ComponentBuilder()
-            .WithButton("Xem diem", "shop:balance", ButtonStyle.Secondary)
+            .WithButton("Xem điểm", "shop:balance", ButtonStyle.Secondary)
             .WithButton("Mua VIP Gold", "shop:buy:vip-gold", ButtonStyle.Success)
             .WithButton("Mua Diamond", "shop:buy:diamond-member", ButtonStyle.Primary)
             .WithButton("Mua Mythic", "shop:buy:mythic-core", ButtonStyle.Danger)
-            .WithButton("Lam moi", "shop:refresh", ButtonStyle.Secondary)
+            .WithButton("Làm mới", "shop:refresh", ButtonStyle.Secondary)
             .Build();
     }
 
