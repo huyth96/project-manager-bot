@@ -34,6 +34,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var deletedChannelsCount = await ResetAllChannelsAsync(guild);
 
         var leadRole = await EnsureRoleAsync(guild, "Studio Lead", new Color(230, 126, 34), isHoisted: true);
+        var guestRole = await EnsureRoleAsync(guild, "Guest", new Color(149, 165, 166));
         var developerRole = await EnsureRoleAsync(guild, "Developer", new Color(52, 152, 219));
         var artistRole = await EnsureRoleAsync(guild, "Artist", new Color(231, 76, 60));
 
@@ -164,6 +165,37 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             ]);
         await ConfigureRoleSelectionPermissionsAsync(guild, roleSelection);
         await ConfigureShopChannelPermissionsAsync(guild, roleShop);
+        await ConfigureGuestAccessAsync(
+            guild,
+            guestRole,
+            generalChat,
+            p1ArtShowcase,
+            mainHallReadOnlyChannels:
+            [
+                announcements,
+                resourcesWiki,
+                onboarding,
+                roleSelection,
+                roleShop
+            ],
+            restrictedTextChannels:
+            [
+                p1Dashboard,
+                p1Backlog,
+                p1General,
+                p1DevTalk,
+                p1Bugs,
+                dailyStandup,
+                githubCommits,
+                globalTaskFeed,
+                commandLogs
+            ],
+            restrictedVoiceChannels:
+            [
+                dailyScrum,
+                coWorking,
+                meetingRoom
+            ]);
         await EnsureRoleSelectionMessageAsync(guild, roleSelection, onboarding, roleShop);
         await EnsureOnboardingMessageAsync(
             guild,
@@ -430,6 +462,64 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 readMessageHistory: PermValue.Allow));
     }
 
+    private async Task ConfigureGuestAccessAsync(
+        SocketGuild guild,
+        IRole guestRole,
+        ITextChannel generalChatChannel,
+        ITextChannel showcaseChannel,
+        IReadOnlyCollection<ITextChannel> mainHallReadOnlyChannels,
+        IReadOnlyCollection<ITextChannel> restrictedTextChannels,
+        IReadOnlyCollection<IVoiceChannel> restrictedVoiceChannels)
+    {
+        foreach (var channel in mainHallReadOnlyChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guestRole,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Allow,
+                    sendMessages: PermValue.Deny,
+                    readMessageHistory: PermValue.Allow));
+        }
+
+        await generalChatChannel.AddPermissionOverwriteAsync(
+            guestRole,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                sendMessages: PermValue.Allow,
+                readMessageHistory: PermValue.Allow));
+
+        await showcaseChannel.AddPermissionOverwriteAsync(
+            guestRole,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                sendMessages: PermValue.Deny,
+                readMessageHistory: PermValue.Allow));
+
+        foreach (var channel in restrictedTextChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guestRole,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Deny,
+                    sendMessages: PermValue.Deny,
+                    readMessageHistory: PermValue.Deny));
+        }
+
+        foreach (var channel in restrictedVoiceChannels)
+        {
+            await channel.AddPermissionOverwriteAsync(
+                guestRole,
+                new OverwritePermissions(
+                    viewChannel: PermValue.Deny,
+                    connect: PermValue.Deny,
+                    speak: PermValue.Deny));
+        }
+
+        _logger.LogInformation(
+            "Đã cấu hình quyền Guest (chỉ chat general, xem sảnh chính và showcase) cho guild {GuildId}",
+            guild.Id);
+    }
+
     private async Task EnsureRoleSelectionMessageAsync(
         SocketGuild guild,
         ITextChannel roleSelectionChannel,
@@ -469,7 +559,8 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 true)
             .AddField(
                 "Lưu ý",
-                "Bot cần quyền `Manage Roles` và role bot phải đứng trên các role thành viên.",
+                "Bot cần quyền `Manage Roles` và role bot phải đứng trên các role thành viên.\n" +
+                "Nếu còn role `Guest`, bạn vẫn chưa truy cập được kênh team cho đến khi được gỡ `Guest`.",
                 false)
             .Build();
 

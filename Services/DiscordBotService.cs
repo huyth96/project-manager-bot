@@ -19,6 +19,7 @@ public sealed class DiscordBotService(
     private readonly IServiceProvider _serviceProvider = serviceProvider;
     private readonly DiscordBotOptions _options = options.Value;
     private readonly ILogger<DiscordBotService> _logger = logger;
+    private const string GuestRoleName = "Guest";
     private const string RoleSelectionChannelSlug = "role-selection";
     private const string AnnouncementsChannelSlug = "announcements";
     private const string RoleSelectionEmbedTitle = "\U0001F3AD Chọn Vai Trò";
@@ -163,9 +164,10 @@ public sealed class DiscordBotService(
         return HandleRoleReactionAsync(cacheableMessage, cacheableChannel, reaction, removeRole: true);
     }
 
-    private Task OnUserJoinedAsync(SocketGuildUser user)
+    private async Task OnUserJoinedAsync(SocketGuildUser user)
     {
-        return SendMemberPresenceLogAsync(
+        await TryAssignGuestRoleAsync(user);
+        await SendMemberPresenceLogAsync(
             guild: user.Guild,
             user: user,
             isJoined: true);
@@ -222,6 +224,37 @@ public sealed class DiscordBotService(
                 isJoined ? "tham gia" : "rời",
                 user.Id,
                 guild.Id);
+        }
+    }
+
+    private async Task TryAssignGuestRoleAsync(SocketGuildUser user)
+    {
+        try
+        {
+            if (user.IsBot)
+            {
+                return;
+            }
+
+            var guestRole = user.Guild.Roles.FirstOrDefault(x =>
+                x.Name.Equals(GuestRoleName, StringComparison.OrdinalIgnoreCase));
+            if (guestRole is null)
+            {
+                _logger.LogWarning("Không tìm thấy role {RoleName} để auto gán cho user {UserId}", GuestRoleName, user.Id);
+                return;
+            }
+
+            if (user.Roles.Any(x => x.Id == guestRole.Id))
+            {
+                return;
+            }
+
+            await user.AddRoleAsync(guestRole);
+            _logger.LogInformation("Đã tự động gán role {RoleName} cho user {UserId} ở guild {GuildId}", GuestRoleName, user.Id, user.Guild.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Không thể tự động gán role {RoleName} cho user {UserId}", GuestRoleName, user.Id);
         }
     }
 
