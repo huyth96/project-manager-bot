@@ -29,9 +29,22 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
 
     private readonly ILogger<InitialSetupService> _logger = logger;
 
-    public async Task<StudioSetupResult> InitializeStudioAsync(SocketGuild guild, CancellationToken cancellationToken = default)
+    public Task<StudioSetupResult> InitializeStudioAsync(SocketGuild guild, CancellationToken cancellationToken = default)
     {
-        var deletedChannelsCount = await ResetAllChannelsAsync(guild);
+        return SetupStudioAsync(guild, resetAllChannels: true, cancellationToken);
+    }
+
+    public Task<StudioSetupResult> UpdateStudioAsync(SocketGuild guild, CancellationToken cancellationToken = default)
+    {
+        return SetupStudioAsync(guild, resetAllChannels: false, cancellationToken);
+    }
+
+    private async Task<StudioSetupResult> SetupStudioAsync(
+        SocketGuild guild,
+        bool resetAllChannels,
+        CancellationToken cancellationToken = default)
+    {
+        var deletedChannelsCount = resetAllChannels ? await ResetAllChannelsAsync(guild) : 0;
 
         var leadRole = await EnsureRoleAsync(guild, "Studio Lead", new Color(230, 126, 34), isHoisted: true);
         var guestRole = await EnsureRoleAsync(guild, "Guest", new Color(149, 165, 166));

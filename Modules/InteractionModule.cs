@@ -73,6 +73,43 @@ public sealed class InteractionModule(
             ephemeral: true);
     }
 
+    [SlashCommand("studio-update", "Cập nhật role, kênh, phân quyền và tin nhắn studio mà không reset server.")]
+    public async Task StudioUpdateAsync()
+    {
+        if (Context.Guild.OwnerId != Context.User.Id)
+        {
+            await RespondAsync("Chỉ chủ server mới có thể chạy `/studio-update`.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+
+        var setupResult = await _initialSetupService.UpdateStudioAsync(Context.Guild);
+
+        var project = await _projectService.UpsertProjectAsync(
+            name: "Project A: Đồ Án Tốt Nghiệp",
+            channelId: setupResult.P1DashboardChannelId,
+            bugChannelId: setupResult.P1BugsChannelId,
+            standupChannelId: setupResult.DailyStandupChannelId,
+            githubCommitsChannelId: setupResult.GitHubCommitsChannelId,
+            globalNotificationChannelId: setupResult.GlobalTaskFeedChannelId);
+
+        await _projectService.RefreshDashboardMessageAsync(project.Id);
+
+        await FollowupAsync(
+            "Đã cập nhật studio (không init lại từ đầu).\n" +
+            "- Kênh/role/quyền/tin nhắn: `đã đồng bộ`\n" +
+            "- Cơ sở dữ liệu: `giữ nguyên`\n" +
+            $"- Kênh dashboard: <#{setupResult.P1DashboardChannelId}>\n" +
+            $"- Kênh lỗi: <#{setupResult.P1BugsChannelId}>\n" +
+            $"- Kênh báo cáo ngày: <#{setupResult.DailyStandupChannelId}>\n" +
+            $"- Kênh github-commits: <#{setupResult.GitHubCommitsChannelId}>\n" +
+            $"- Kênh thông báo toàn cục: <#{setupResult.GlobalTaskFeedChannelId}>\n" +
+            $"- Kênh shop: <#{setupResult.ShopChannelId}>\n" +
+            $"- Mã dự án: `{project.Id}`",
+            ephemeral: true);
+    }
+
     private async Task ResetDatabaseAsync(CancellationToken cancellationToken = default)
     {
         const int maxAttempts = 10;
