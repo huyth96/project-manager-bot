@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Data;
 using System.Data.Common;
 using System.Globalization;
+using System.Text.Json;
 
 namespace ProjectManagerBot.Modules;
 
@@ -23,6 +24,7 @@ public sealed class InteractionModule(
     ILogger<InteractionModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
+    private const int BacklogJsonImportMaxItems = 50;
     private static readonly ConcurrentDictionary<string, SprintDraftState> SprintDrafts = new();
     private static readonly int[] SprintPickerHours = [9, 12, 15, 18, 21];
     private static readonly TimeSpan SprintDraftTtl = TimeSpan.FromMinutes(20);
@@ -240,6 +242,24 @@ public sealed class InteractionModule(
         await RespondWithModalAsync<AddBacklogModal>($"backlog:add:{project.Id}");
     }
 
+    [SlashCommand("backlog-import-json", "Thêm nhiều quest/task vào tồn đọng bằng JSON (không phải nhập từng cái).")]
+    public async Task BacklogImportJsonAsync()
+    {
+        var project = await ResolveProjectFromChannelAsync();
+        if (project is null)
+        {
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể import backlog hàng loạt.", ephemeral: true);
+            return;
+        }
+
+        await RespondWithModalAsync<BacklogBulkImportModal>($"backlog:import_json:{project.Id}");
+    }
+
     [ModalInteraction("backlog:add:*", true)]
     public async Task HandleAddBacklogModalAsync(string projectIdRaw, AddBacklogModal modal)
     {
@@ -285,6 +305,84 @@ public sealed class InteractionModule(
         await _projectService.RefreshDashboardMessageAsync(projectId);
 
         await RespondAsync("Đã thêm nhiệm vụ vào tồn đọng.", ephemeral: true);
+    }
+
+    [ModalInteraction("backlog:import_json:*", true)]
+    public async Task HandleBacklogImportJsonModalAsync(string projectIdRaw, BacklogBulkImportModal modal)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh dự án không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể import backlog hàng loạt.", ephemeral: true);
+            return;
+        }
+
+        if (!TryParseBacklogImportJson(modal.JsonPayload, out var drafts, out var errorMessage))
+        {
+            await RespondAsync(
+                $"{errorMessage}\n\nVí dụ JSON hợp lệ:\n```json\n[\n  {{ \"title\": \"Thiết kế màn hình đăng nhập\", \"points\": 3 }},\n  {{ \"title\": \"Quest mở đầu\", \"description\": \"Tạo flow tutorial\", \"points\": 5 }}\n]\n```",
+                ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(x => x.Id == projectId);
+        if (project is null)
+        {
+            await FollowupAsync("Không tìm thấy dự án tương ứng để import backlog.", ephemeral: true);
+            return;
+        }
+
+        var createdTasks = drafts
+            .Select(draft => new TaskItem
+            {
+                ProjectId = projectId,
+                SprintId = null,
+                Type = TaskItemType.Task,
+                Status = TaskItemStatus.Backlog,
+                Title = draft.Title,
+                Description = draft.Description,
+                Points = draft.Points,
+                CreatedById = Context.User.Id
+            })
+            .ToList();
+
+        db.TaskItems.AddRange(createdTasks);
+        await db.SaveChangesAsync();
+
+        var backlogChannel = ResolveBacklogChannel(Context.Guild, project.ChannelId);
+        var postedCards = 0;
+        if (backlogChannel is not null)
+        {
+            foreach (var task in createdTasks)
+            {
+                await backlogChannel.SendMessageAsync(embed: BuildBacklogItemEmbed(task));
+                postedCards++;
+            }
+        }
+        else
+        {
+            _logger.LogWarning("Không tìm thấy kênh tồn đọng cho dự án {ProjectId} khi import JSON", projectId);
+        }
+
+        await _projectService.RefreshDashboardMessageAsync(projectId);
+
+        var totalPoints = createdTasks.Sum(x => x.Points);
+        var backlogChannelText = backlogChannel is null ? "`không tìm thấy kênh backlog để gửi thẻ`" : backlogChannel.Mention;
+        await FollowupAsync(
+            "Đã import backlog hàng loạt từ JSON.\n" +
+            $"- Số nhiệm vụ tạo mới: `{createdTasks.Count}`\n" +
+            $"- Tổng điểm: `{totalPoints}`\n" +
+            $"- Kênh backlog: {backlogChannelText}\n" +
+            $"- Số thẻ đã gửi: `{postedCards}`",
+            ephemeral: true);
     }
 
     [ComponentInteraction("dashboard:start_sprint", true)]
@@ -1600,6 +1698,171 @@ public sealed class InteractionModule(
         return guildUser.Roles.Any(x => x.Name.Equals("Studio Lead", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool TryParseBacklogImportJson(
+        string raw,
+        out List<BacklogImportDraft> drafts,
+        out string errorMessage)
+    {
+        drafts = [];
+        errorMessage = string.Empty;
+
+        var normalized = NormalizeJsonPayload(raw);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            errorMessage = "JSON rỗng. Hãy dán mảng object nhiệm vụ vào ô nhập.";
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            var root = document.RootElement;
+
+            JsonElement itemsNode;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                itemsNode = root;
+            }
+            else if (root.ValueKind == JsonValueKind.Object && TryGetPropertyIgnoreCase(root, "items", out var embeddedItems) && embeddedItems.ValueKind == JsonValueKind.Array)
+            {
+                itemsNode = embeddedItems;
+            }
+            else
+            {
+                errorMessage = "JSON phải là mảng `[]` hoặc object có trường `items` là mảng.";
+                return false;
+            }
+
+            var index = 0;
+            foreach (var item in itemsNode.EnumerateArray())
+            {
+                index++;
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    errorMessage = $"Phần tử thứ {index} không phải object JSON.";
+                    return false;
+                }
+
+                var title = ReadFirstString(item, "title", "taskTitle", "name", "quest");
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    errorMessage = $"Phần tử thứ {index} thiếu `title` (hoặc `name`/`quest`).";
+                    return false;
+                }
+
+                var description = ReadFirstString(item, "description", "desc", "details", "note");
+                var points = ReadFirstInt(item, "points", "point", "score") ?? 1;
+                points = Math.Clamp(points, 1, 100);
+
+                drafts.Add(new BacklogImportDraft(
+                    Title: title.Trim(),
+                    Description: string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                    Points: points));
+            }
+
+            if (drafts.Count == 0)
+            {
+                errorMessage = "JSON không có nhiệm vụ nào để import.";
+                return false;
+            }
+
+            if (drafts.Count > BacklogJsonImportMaxItems)
+            {
+                errorMessage = $"Mỗi lần import tối đa `{BacklogJsonImportMaxItems}` nhiệm vụ để tránh spam.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            errorMessage = $"JSON không hợp lệ: {Truncate(ex.Message, 220)}";
+            return false;
+        }
+    }
+
+    private static string NormalizeJsonPayload(string raw)
+    {
+        var text = raw.Trim();
+        if (!text.StartsWith("```", StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        var firstNewLine = text.IndexOf('\n');
+        var lastFence = text.LastIndexOf("```", StringComparison.Ordinal);
+        if (firstNewLine < 0 || lastFence <= firstNewLine)
+        {
+            return text;
+        }
+
+        return text[(firstNewLine + 1)..lastFence].Trim();
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string? ReadFirstString(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString();
+            }
+
+            if (value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+            {
+                return value.ToString();
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ReadFirstInt(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+            {
+                return number;
+            }
+
+            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number))
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
     private static int ParsePoints(string raw, int fallback)
     {
         if (!int.TryParse(raw, out var points))
@@ -2490,6 +2753,11 @@ public sealed record SprintDraftState(
     DateTime? StartDateLocal,
     DateTime? EndDateLocal);
 
+public sealed record BacklogImportDraft(
+    string Title,
+    string? Description,
+    int Points);
+
 public sealed class AddBacklogModal : IModal
 {
     public string Title => "Thêm Vào Tồn Đọng";
@@ -2505,6 +2773,19 @@ public sealed class AddBacklogModal : IModal
     [InputLabel("Mô tả")]
     [ModalTextInput("description", TextInputStyle.Paragraph, maxLength: 1000)]
     public string? Description { get; set; }
+}
+
+public sealed class BacklogBulkImportModal : IModal
+{
+    public string Title => "Import Backlog Bằng JSON";
+
+    [InputLabel("Danh sách nhiệm vụ JSON")]
+    [ModalTextInput(
+        "backlog_json_payload",
+        TextInputStyle.Paragraph,
+        placeholder: "[{\"title\":\"Quest A\",\"points\":3},{\"title\":\"Quest B\",\"description\":\"...\",\"points\":5}]",
+        maxLength: 4000)]
+    public string JsonPayload { get; set; } = string.Empty;
 }
 
 public sealed class StartSprintModal : IModal

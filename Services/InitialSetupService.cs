@@ -142,6 +142,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         var dailyScrum = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F399\uFE0F Daily Scrum");
         var coWorking = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F3A7 Co-working");
         var meetingRoom = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F4DE Meeting Room");
+        var openLobby = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F5E3\uFE0F Open Lobby");
 
         await ConfigureDashboardPermissionsAsync(guild, p1Dashboard, leadRole);
         await ConfigureMemberVisibilityAsync(
@@ -178,6 +179,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             ]);
         await ConfigureRoleSelectionPermissionsAsync(guild, roleSelection);
         await ConfigureShopChannelPermissionsAsync(guild, roleShop);
+        await ConfigureOpenVoiceChannelPermissionsAsync(guild, openLobby);
         await ConfigureGuestAccessAsync(
             guild,
             guestRole,
@@ -473,6 +475,23 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 viewChannel: PermValue.Allow,
                 sendMessages: PermValue.Allow,
                 readMessageHistory: PermValue.Allow));
+    }
+
+    private static async Task ConfigureOpenVoiceChannelPermissionsAsync(SocketGuild guild, IVoiceChannel openVoiceChannel)
+    {
+        await openVoiceChannel.AddPermissionOverwriteAsync(
+            guild.EveryoneRole,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                connect: PermValue.Allow,
+                speak: PermValue.Allow));
+
+        await openVoiceChannel.AddPermissionOverwriteAsync(
+            guild.CurrentUser,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                connect: PermValue.Allow,
+                speak: PermValue.Allow));
     }
 
     private async Task ConfigureGuestAccessAsync(
