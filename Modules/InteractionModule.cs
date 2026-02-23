@@ -24,6 +24,7 @@ public sealed class InteractionModule(
     ILogger<InteractionModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
+    private const int EphemeralPanelAutoDeleteSeconds = 180;
     private const int BacklogJsonImportMaxItems = 50;
     private static readonly ConcurrentDictionary<string, SprintDraftState> SprintDrafts = new();
     private static readonly int[] SprintPickerHours = [9, 12, 15, 18, 21];
@@ -260,6 +261,24 @@ public sealed class InteractionModule(
         await RespondWithModalAsync<BacklogBulkImportModal>($"backlog:import_json:{project.Id}");
     }
 
+    [SlashCommand("backlog-manage", "Giao diện quản lý tồn đọng riêng cho Trưởng nhóm/Quản trị (CRUD).")]
+    public async Task BacklogManageAsync()
+    {
+        var project = await ResolveProjectFromChannelAsync();
+        if (project is null)
+        {
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới dùng được giao diện quản lý tồn đọng.", ephemeral: true);
+            return;
+        }
+
+        await OpenBacklogManagerPanelAsync(project.Id);
+    }
+
     [ModalInteraction("backlog:add:*", true)]
     public async Task HandleAddBacklogModalAsync(string projectIdRaw, AddBacklogModal modal)
     {
@@ -385,6 +404,318 @@ public sealed class InteractionModule(
             ephemeral: true);
     }
 
+    [ComponentInteraction("admin:backlog_mgr:*", true)]
+    public async Task OpenBacklogManagerFromAdminPanelAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới dùng được giao diện quản lý tồn đọng.", ephemeral: true);
+            return;
+        }
+
+        await OpenBacklogManagerPanelAsync(projectId);
+    }
+
+    [ComponentInteraction("admin:backlog_refresh:*", true)]
+    public async Task RefreshBacklogManagerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới dùng được giao diện quản lý tồn đọng.", ephemeral: true);
+            return;
+        }
+
+        await OpenBacklogManagerPanelAsync(projectId);
+    }
+
+    [ComponentInteraction("admin:backlog_create:*", true)]
+    public async Task OpenBacklogCreateFromManagerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được tạo backlog từ giao diện quản lý.", ephemeral: true);
+            return;
+        }
+
+        await RespondWithModalAsync<AddBacklogModal>($"backlog:add:{projectId}");
+    }
+
+    [ComponentInteraction("admin:backlog_import:*", true)]
+    public async Task OpenBacklogImportFromManagerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được import backlog hàng loạt.", ephemeral: true);
+            return;
+        }
+
+        await RespondWithModalAsync<BacklogBulkImportModal>($"backlog:import_json:{projectId}");
+    }
+
+    [ComponentInteraction("admin:backlog_edit:*", true)]
+    public async Task OpenBacklogEditPickerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được sửa backlog.", ephemeral: true);
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var tasks = await QueryBacklogTasks(db, projectId)
+            .Take(25)
+            .ToListAsync();
+
+        if (tasks.Count == 0)
+        {
+            await RespondAsync("Chưa có nhiệm vụ tồn đọng để sửa.", ephemeral: true);
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId($"admin:backlog_pick_edit:{projectId}")
+            .WithPlaceholder("Chọn task tồn đọng để sửa")
+            .WithMinValues(1)
+            .WithMaxValues(1);
+
+        foreach (var task in tasks)
+        {
+            menu.AddOption(
+                label: $"#{task.Id} {Truncate(task.Title, 70)}",
+                value: task.Id.ToString(),
+                description: $"🎯 {task.Points} điểm");
+        }
+
+        var components = new ComponentBuilder().WithSelectMenu(menu).Build();
+        await RespondPanelAsync("✏️ Chọn nhiệm vụ tồn đọng cần sửa", components: components);
+    }
+
+    [ComponentInteraction("admin:backlog_pick_edit:*", true)]
+    public async Task OpenBacklogEditModalAsync(string projectIdRaw, string[] selectedTaskIds)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được sửa backlog.", ephemeral: true);
+            return;
+        }
+
+        var selected = selectedTaskIds.FirstOrDefault();
+        if (!int.TryParse(selected, out var taskId))
+        {
+            await RespondAsync("Task được chọn không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var task = await QueryBacklogTasks(db, projectId)
+            .FirstOrDefaultAsync(x => x.Id == taskId);
+        if (task is null)
+        {
+            await RespondAsync("Không tìm thấy task tồn đọng để sửa.", ephemeral: true);
+            return;
+        }
+
+        await RespondWithModalAsync<EditBacklogModal>($"admin:backlog_edit_submit:{projectId}:{taskId}");
+    }
+
+    [ModalInteraction("admin:backlog_edit_submit:*:*", true)]
+    public async Task SubmitBacklogEditAsync(string projectIdRaw, string taskIdRaw, EditBacklogModal modal)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId) || !int.TryParse(taskIdRaw, out var taskId))
+        {
+            await RespondAsync("Ngữ cảnh sửa backlog không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được sửa backlog.", ephemeral: true);
+            return;
+        }
+
+        var titleRaw = modal.TaskTitle?.Trim();
+        var pointsRaw = modal.Points?.Trim();
+        var descriptionRaw = modal.Description;
+
+        var hasTitle = !string.IsNullOrWhiteSpace(titleRaw);
+        var hasPoints = !string.IsNullOrWhiteSpace(pointsRaw);
+        var hasDescription = !string.IsNullOrWhiteSpace(descriptionRaw);
+
+        if (!hasTitle && !hasPoints && !hasDescription)
+        {
+            await RespondAsync("Chưa có thay đổi nào. Hãy nhập ít nhất 1 trường để cập nhật.", ephemeral: true);
+            return;
+        }
+
+        int? parsedPoints = null;
+        if (hasPoints)
+        {
+            if (!int.TryParse(pointsRaw, out var pointsValue))
+            {
+                await RespondAsync("Điểm công việc không hợp lệ. Hãy nhập số nguyên (ví dụ: 1, 3, 5).", ephemeral: true);
+                return;
+            }
+
+            parsedPoints = Math.Clamp(pointsValue, 1, 100);
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var task = await QueryBacklogTasks(db, projectId)
+            .FirstOrDefaultAsync(x => x.Id == taskId);
+        if (task is null)
+        {
+            await RespondAsync("Không tìm thấy task tồn đọng để sửa.", ephemeral: true);
+            return;
+        }
+
+        if (hasTitle)
+        {
+            task.Title = titleRaw!;
+        }
+
+        if (parsedPoints.HasValue)
+        {
+            task.Points = parsedPoints.Value;
+        }
+
+        if (hasDescription)
+        {
+            var normalizedDescription = descriptionRaw!.Trim();
+            task.Description = normalizedDescription.Equals("[clear]", StringComparison.OrdinalIgnoreCase) ||
+                               normalizedDescription.Equals("/clear", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : normalizedDescription;
+        }
+
+        await db.SaveChangesAsync();
+        await _projectService.RefreshDashboardMessageAsync(projectId);
+
+        await RespondAsync(
+            $"Đã cập nhật task tồn đọng `#{task.Id}`.\n" +
+            $"- Tiêu đề: `{task.Title}`\n" +
+            $"- Điểm: `{task.Points}`",
+            ephemeral: true);
+    }
+
+    [ComponentInteraction("admin:backlog_delete:*", true)]
+    public async Task OpenBacklogDeletePickerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được xóa backlog.", ephemeral: true);
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var tasks = await QueryBacklogTasks(db, projectId)
+            .Take(25)
+            .ToListAsync();
+
+        if (tasks.Count == 0)
+        {
+            await RespondAsync("Chưa có nhiệm vụ tồn đọng để xóa.", ephemeral: true);
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId($"admin:backlog_pick_delete:{projectId}")
+            .WithPlaceholder("Chọn task tồn đọng để xóa")
+            .WithMinValues(1)
+            .WithMaxValues(1);
+
+        foreach (var task in tasks)
+        {
+            menu.AddOption(
+                label: $"#{task.Id} {Truncate(task.Title, 70)}",
+                value: task.Id.ToString(),
+                description: $"🎯 {task.Points} điểm");
+        }
+
+        var components = new ComponentBuilder().WithSelectMenu(menu).Build();
+        await RespondPanelAsync("🗑️ Chọn nhiệm vụ tồn đọng cần xóa (xóa ngay sau khi chọn)", components: components);
+    }
+
+    [ComponentInteraction("admin:backlog_pick_delete:*", true)]
+    public async Task DeleteBacklogTaskAsync(string projectIdRaw, string[] selectedTaskIds)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh quản lý tồn đọng không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới được xóa backlog.", ephemeral: true);
+            return;
+        }
+
+        var selected = selectedTaskIds.FirstOrDefault();
+        if (!int.TryParse(selected, out var taskId))
+        {
+            await RespondAsync("Task được chọn không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var task = await QueryBacklogTasks(db, projectId)
+            .FirstOrDefaultAsync(x => x.Id == taskId);
+        if (task is null)
+        {
+            await RespondAsync("Không tìm thấy task tồn đọng để xóa.", ephemeral: true);
+            return;
+        }
+
+        var taskTitle = task.Title;
+        db.TaskItems.Remove(task);
+        await db.SaveChangesAsync();
+        await _projectService.RefreshDashboardMessageAsync(projectId);
+
+        await RespondTransientAsync($"Đã xóa task tồn đọng `#{taskId} {Truncate(taskTitle, 60)}`.");
+    }
+
     [ComponentInteraction("dashboard:start_sprint", true)]
     public async Task StartSprintAsync()
     {
@@ -435,7 +766,7 @@ public sealed class InteractionModule(
                 false)
             .Build();
 
-        await RespondAsync(embed: embed, components: components, ephemeral: true);
+        await RespondPanelAsync(embed: embed, components: components);
     }
 
     [ComponentInteraction("admin:start_sprint:*", true)]
@@ -729,7 +1060,7 @@ public sealed class InteractionModule(
             .WithButton("🗺️ Mở Bảng Nhiệm Vụ", $"board:refresh:{project.Id}", ButtonStyle.Secondary)
             .Build();
 
-        await RespondAsync(embed: embed, components: components, ephemeral: true);
+        await RespondPanelAsync(embed: embed, components: components);
     }
 
     [ComponentInteraction("dashboard:view_board", true)]
@@ -859,7 +1190,7 @@ public sealed class InteractionModule(
                 ButtonBuilder.CreateSecondaryButton("🔄 Làm Mới", $"board:refresh:{project.Id}"))
             .Build();
 
-        await RespondAsync(embed: embed, components: components, ephemeral: true);
+        await RespondPanelAsync(embed: embed, components: components);
     }
 
     [ComponentInteraction("board:refresh:*", true)]
@@ -919,7 +1250,7 @@ public sealed class InteractionModule(
         }
 
         var components = new ComponentBuilder().WithSelectMenu(menu).Build();
-        await RespondTransientAsync("⚔️ Chọn nhiệm vụ cần nhận", components: components);
+        await RespondPanelAsync("⚔️ Chọn nhiệm vụ cần nhận", components: components);
     }
 
     [ComponentInteraction("board:claim_select:*", true)]
@@ -1032,7 +1363,7 @@ public sealed class InteractionModule(
         }
 
         var components = new ComponentBuilder().WithSelectMenu(menu).Build();
-        await RespondTransientAsync("✅ Chọn nhiệm vụ để đánh dấu hoàn thành", components: components);
+        await RespondPanelAsync("✅ Chọn nhiệm vụ để đánh dấu hoàn thành", components: components);
     }
 
     [ComponentInteraction("tasks:start_select:*", true)]
@@ -1471,7 +1802,7 @@ public sealed class InteractionModule(
         }
 
         var components = new ComponentBuilder().WithSelectMenu(taskMenu).Build();
-        await RespondTransientAsync("🎯 Chọn nhiệm vụ trong chu kỳ để giao", components: components);
+        await RespondPanelAsync("🎯 Chọn nhiệm vụ trong chu kỳ để giao", components: components);
     }
 
     [ComponentInteraction("admin:assign_pick_task:*", true)]
@@ -1512,7 +1843,7 @@ public sealed class InteractionModule(
             .WithMaxValues(1);
 
         var components = new ComponentBuilder().WithSelectMenu(userMenu).Build();
-        await RespondTransientAsync(
+        await RespondPanelAsync(
             $"👥 Giao nhiệm vụ `#{task.Id} {Truncate(task.Title, 60)}` cho:",
             components: components);
     }
@@ -1642,6 +1973,19 @@ public sealed class InteractionModule(
         }
     }
 
+    private Task RespondPanelAsync(
+        string? text = null,
+        Embed? embed = null,
+        MessageComponent? components = null)
+    {
+        return RespondTransientAsync(
+            text: text,
+            embed: embed,
+            components: components,
+            ephemeral: true,
+            deleteAfterSeconds: EphemeralPanelAutoDeleteSeconds);
+    }
+
     private async Task DeleteOriginalResponseAfterDelayAsync(TimeSpan delay)
     {
         try
@@ -1696,6 +2040,40 @@ public sealed class InteractionModule(
         }
 
         return guildUser.Roles.Any(x => x.Name.Equals("Studio Lead", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task OpenBacklogManagerPanelAsync(int projectId)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+
+        var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(x => x.Id == projectId);
+        if (project is null)
+        {
+            await RespondAsync("Không tìm thấy dự án để mở giao diện quản lý tồn đọng.", ephemeral: true);
+            return;
+        }
+
+        var backlogQuery = QueryBacklogTasks(db, projectId);
+        var totalCount = await backlogQuery.CountAsync();
+        var totalPoints = totalCount == 0
+            ? 0
+            : await backlogQuery.SumAsync(x => x.Points);
+        var previewItems = await backlogQuery
+            .OrderBy(x => x.Id)
+            .Take(15)
+            .ToListAsync();
+
+        var embed = BuildBacklogManagerEmbed(project, previewItems, totalCount, totalPoints);
+        var components = BuildBacklogManagerComponents(projectId, totalCount > 0);
+        await RespondPanelAsync(embed: embed, components: components);
+    }
+
+    private static IQueryable<TaskItem> QueryBacklogTasks(BotDbContext db, int projectId)
+    {
+        return db.TaskItems.Where(x =>
+            x.ProjectId == projectId &&
+            x.SprintId == null &&
+            x.Type == TaskItemType.Task);
     }
 
     private static bool TryParseBacklogImportJson(
@@ -1933,7 +2311,7 @@ public sealed class InteractionModule(
         var components = new ComponentBuilder().WithSelectMenu(menu).Build();
         await _projectService.RefreshDashboardMessageAsync(projectId);
 
-        await RespondTransientAsync(
+        await RespondPanelAsync(
             $"Chu kỳ `{sprint.Name}` đã kích hoạt. Hãy chọn nhiệm vụ cần đưa vào:",
             components: components);
     }
@@ -2118,6 +2496,50 @@ public sealed class InteractionModule(
             .WithButton(
                 ButtonBuilder.CreatePrimaryButton("🎯 Giao Nhiệm Vụ", $"admin:assign_task:{projectId}")
                     .WithDisabled(disable))
+            .WithButton(
+                ButtonBuilder.CreateSecondaryButton("📚 Tồn Đọng", $"admin:backlog_mgr:{projectId}")
+                    .WithDisabled(disable))
+            .Build();
+    }
+
+    private static MessageComponent BuildBacklogManagerComponents(int projectId, bool hasItems)
+    {
+        return new ComponentBuilder()
+            .WithButton("➕ Tạo", $"admin:backlog_create:{projectId}", ButtonStyle.Success)
+            .WithButton("📥 Import JSON", $"admin:backlog_import:{projectId}", ButtonStyle.Primary)
+            .WithButton("✏️ Sửa", $"admin:backlog_edit:{projectId}", ButtonStyle.Secondary, disabled: !hasItems)
+            .WithButton("🗑️ Xóa", $"admin:backlog_delete:{projectId}", ButtonStyle.Danger, disabled: !hasItems)
+            .WithButton("🔄 Làm mới", $"admin:backlog_refresh:{projectId}", ButtonStyle.Secondary)
+            .Build();
+    }
+
+    private static Embed BuildBacklogManagerEmbed(Project project, IReadOnlyCollection<TaskItem> previewItems, int totalCount, int totalPoints)
+    {
+        var previewText = previewItems.Count == 0
+            ? "Chưa có task tồn đọng nào."
+            : string.Join(
+                "\n",
+                previewItems.Select(x =>
+                    $"`#{x.Id}` • {Truncate(x.Title, 52)} • `{x.Points}đ` • {(x.Status == TaskItemStatus.Backlog ? "Backlog" : x.Status.ToString())}"));
+
+        var remaining = Math.Max(0, totalCount - previewItems.Count);
+        if (remaining > 0)
+        {
+            previewText += $"\n... và còn `{remaining}` task nữa (UI chọn sửa/xóa hiển thị tối đa 25 task đầu).";
+        }
+
+        return new EmbedBuilder()
+            .WithTitle($"📚 Quản Lý Tồn Đọng • {project.Name}")
+            .WithColor(Color.Gold)
+            .WithDescription(
+                "Giao diện quản lý backlog riêng cho admin/Studio Lead.\n" +
+                "Bạn có thể tạo, xem, sửa, xóa và import JSON hàng loạt.")
+            .AddField("📊 Tổng quan", $"- Số task backlog: `{totalCount}`\n- Tổng điểm: `{totalPoints}`", false)
+            .AddField("📜 Danh sách xem nhanh", previewText, false)
+            .AddField(
+                "📝 Ghi chú sửa mô tả",
+                "Trong modal sửa, nhập `/clear` hoặc `[clear]` để xóa mô tả hiện tại.",
+                false)
             .Build();
     }
 
@@ -2786,6 +3208,26 @@ public sealed class BacklogBulkImportModal : IModal
         placeholder: "[{\"title\":\"Quest A\",\"points\":3},{\"title\":\"Quest B\",\"description\":\"...\",\"points\":5}]",
         maxLength: 4000)]
     public string JsonPayload { get; set; } = string.Empty;
+}
+
+public sealed class EditBacklogModal : IModal
+{
+    public string Title => "Sửa Task Tồn Đọng";
+
+    [InputLabel("Tiêu đề mới (để trống = giữ nguyên)")]
+    [RequiredInput(false)]
+    [ModalTextInput("edit_backlog_title", TextInputStyle.Short, maxLength: 200)]
+    public string? TaskTitle { get; set; }
+
+    [InputLabel("Điểm mới (để trống = giữ nguyên)")]
+    [RequiredInput(false)]
+    [ModalTextInput("edit_backlog_points", TextInputStyle.Short, placeholder: "1-100", maxLength: 3)]
+    public string? Points { get; set; }
+
+    [InputLabel("Mô tả mới (/clear để xóa, để trống = giữ nguyên)")]
+    [RequiredInput(false)]
+    [ModalTextInput("edit_backlog_description", TextInputStyle.Paragraph, maxLength: 1000)]
+    public string? Description { get; set; }
 }
 
 public sealed class StartSprintModal : IModal
