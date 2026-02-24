@@ -1031,7 +1031,11 @@ public sealed class InteractionModule(
         }
 
         var myTasks = await db.TaskItems
-            .Where(x => x.ProjectId == project.Id && x.SprintId == activeSprint.Id && x.AssigneeId == Context.User.Id)
+            .Where(x => x.ProjectId == project.Id &&
+                        x.SprintId == activeSprint.Id &&
+                        x.Type == TaskItemType.Task &&
+                        x.AssigneeId == Context.User.Id &&
+                        x.Status != TaskItemStatus.Done)
             .OrderBy(x => x.Status)
             .ThenBy(x => x.Id)
             .ToListAsync();
@@ -1339,15 +1343,19 @@ public sealed class InteractionModule(
         await using var db = await _dbContextFactory.CreateDbContextAsync();
         var tasks = await db.TaskItems
             .Where(x => x.ProjectId == projectId &&
-                        x.Status == TaskItemStatus.InProgress &&
+                        x.Type == TaskItemType.Task &&
+                        (x.Status == TaskItemStatus.Todo || x.Status == TaskItemStatus.InProgress) &&
                         x.AssigneeId == Context.User.Id)
-            .OrderBy(x => x.Id)
+            .OrderBy(x => x.Status)
+            .ThenBy(x => x.Id)
             .Take(25)
             .ToListAsync();
 
         if (tasks.Count == 0)
         {
-            await RespondAsync("Bạn chưa có nhiệm vụ đang xử lý.", ephemeral: true);
+            await RespondAsync(
+                "Bạn chưa có nhiệm vụ (task) nào được giao/đang xử lý để đánh dấu hoàn thành. Nếu là lỗi (bug), dùng nút `Đã Sửa` trong kênh bug.",
+                ephemeral: true);
             return;
         }
 
@@ -1359,7 +1367,10 @@ public sealed class InteractionModule(
 
         foreach (var task in tasks)
         {
-            menu.AddOption(Truncate(task.Title, 90), task.Id.ToString(), $"#{task.Id} - {task.Points}pt");
+            menu.AddOption(
+                Truncate(task.Title, 90),
+                task.Id.ToString(),
+                $"#{task.Id} - {GetStatusBadge(task.Status)} - {task.Points}pt");
         }
 
         var components = new ComponentBuilder().WithSelectMenu(menu).Build();
@@ -1412,9 +1423,16 @@ public sealed class InteractionModule(
         var tasks = await db.TaskItems
             .Where(x => x.ProjectId == projectId &&
                         taskIds.Contains(x.Id) &&
-                        x.Status == TaskItemStatus.InProgress &&
+                        x.Type == TaskItemType.Task &&
+                        (x.Status == TaskItemStatus.Todo || x.Status == TaskItemStatus.InProgress) &&
                         x.AssigneeId == Context.User.Id)
             .ToListAsync();
+
+        if (tasks.Count == 0)
+        {
+            await RespondTransientAsync("Không có nhiệm vụ hợp lệ để đánh dấu hoàn thành (có thể đã đổi trạng thái trước đó).");
+            return;
+        }
 
         foreach (var task in tasks)
         {
