@@ -754,6 +754,7 @@ public sealed class InteractionModule(
                       "━━━━━━━━━━━━━━━━━━━━\n" +
                       "⚔️ Chức năng\n" +
                       "- **Bắt Đầu Chu Kỳ**: tạo chu kỳ mới\n" +
+                      "- **Thêm Vào Chu Kỳ**: bổ sung task backlog vào chu kỳ đang chạy\n" +
                       "- **Kết Thúc Chu Kỳ**: đóng chu kỳ, tính vận tốc\n" +
                       "- **Giao Nhiệm Vụ**: chỉ định người xử lý\n\n" +
                       "> ⚠️ Việc chưa xong khi kết thúc chu kỳ sẽ quay lại tồn đọng."
@@ -761,6 +762,7 @@ public sealed class InteractionModule(
             .AddField(
                 "🧭 Hướng Dẫn Nhanh",
                 "- Mở chu kỳ từ đầu mỗi vòng làm việc\n" +
+                "- Có thể bổ sung thêm task backlog trong lúc chu kỳ đang chạy\n" +
                 "- Theo dõi lỗi/nhiệm vụ trong Bảng Nhiệm Vụ\n" +
                 "- Chốt chu kỳ đúng hạn để bảo toàn nhịp đội",
                 false)
@@ -982,6 +984,12 @@ public sealed class InteractionModule(
             return;
         }
 
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể thêm nhiệm vụ vào chu kỳ.", ephemeral: true);
+            return;
+        }
+
         var taskIds = selectedTaskIds
             .Select(x => int.TryParse(x, out var parsed) ? parsed : (int?)null)
             .Where(x => x.HasValue)
@@ -994,6 +1002,12 @@ public sealed class InteractionModule(
         if (sprint is null)
         {
             await RespondAsync("Không tìm thấy chu kỳ.", ephemeral: true);
+            return;
+        }
+
+        if (!sprint.IsActive)
+        {
+            await RespondAsync("Chu kỳ này không còn hoạt động để thêm nhiệm vụ.", ephemeral: true);
             return;
         }
 
@@ -1011,6 +1025,60 @@ public sealed class InteractionModule(
         await _projectService.RefreshDashboardMessageAsync(sprint.ProjectId);
 
         await RespondTransientAsync($"Đã thêm {tasks.Count} nhiệm vụ vào chu kỳ `{sprint.Name}`.");
+    }
+
+    [ComponentInteraction("admin:add_sprint_tasks:*", true)]
+    public async Task OpenAddTasksToActiveSprintPickerAsync(string projectIdRaw)
+    {
+        if (!int.TryParse(projectIdRaw, out var projectId))
+        {
+            await RespondAsync("Ngữ cảnh dự án không hợp lệ.", ephemeral: true);
+            return;
+        }
+
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể thêm nhiệm vụ vào chu kỳ.", ephemeral: true);
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var activeSprint = await db.Sprints.FirstOrDefaultAsync(x => x.ProjectId == projectId && x.IsActive);
+        if (activeSprint is null)
+        {
+            await RespondAsync("Không có chu kỳ đang chạy để thêm nhiệm vụ.", ephemeral: true);
+            return;
+        }
+
+        var backlogTasks = await QueryBacklogTasks(db, projectId)
+            .OrderBy(x => x.Id)
+            .Take(25)
+            .ToListAsync();
+
+        if (backlogTasks.Count == 0)
+        {
+            await RespondAsync("Không còn task tồn đọng nào để thêm vào chu kỳ hiện tại.", ephemeral: true);
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId($"sprint:select_tasks:{activeSprint.Id}")
+            .WithPlaceholder("Chọn task tồn đọng để thêm vào chu kỳ đang chạy")
+            .WithMinValues(1)
+            .WithMaxValues(backlogTasks.Count);
+
+        foreach (var task in backlogTasks)
+        {
+            menu.AddOption(
+                Truncate(task.Title, 90),
+                task.Id.ToString(),
+                $"Điểm: {task.Points}");
+        }
+
+        var components = new ComponentBuilder().WithSelectMenu(menu).Build();
+        await RespondPanelAsync(
+            $"➕ Chọn nhiệm vụ để thêm vào chu kỳ `{activeSprint.Name}`",
+            components: components);
     }
 
     [ComponentInteraction("dashboard:my_tasks", true)]
@@ -2512,7 +2580,10 @@ public sealed class InteractionModule(
                 ButtonBuilder.CreateDangerButton("🏁 Kết Thúc Chu Kỳ", $"admin:end_sprint:{projectId}")
                     .WithDisabled(disable))
             .WithButton(
-                ButtonBuilder.CreatePrimaryButton("🎯 Giao Nhiệm Vụ", $"admin:assign_task:{projectId}")
+                ButtonBuilder.CreatePrimaryButton("➕ Thêm Vào Chu Kỳ", $"admin:add_sprint_tasks:{projectId}")
+                    .WithDisabled(disable))
+            .WithButton(
+                ButtonBuilder.CreateSecondaryButton("🎯 Giao Nhiệm Vụ", $"admin:assign_task:{projectId}")
                     .WithDisabled(disable))
             .WithButton(
                 ButtonBuilder.CreateSecondaryButton("📚 Tồn Đọng", $"admin:backlog_mgr:{projectId}")
@@ -3072,26 +3143,51 @@ public sealed class TestCommandModule(
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
-        var overdueThresholdUtc = DateTimeOffset.UtcNow.AddHours(-24);
+        var localNowDateTime = DateTime.UtcNow.AddHours(7);
 
         var tasks = await db.TaskItems
             .Where(x =>
                 x.ProjectId == project.Id &&
                 x.Type == TaskItemType.Task &&
                 x.SprintId != null &&
-                x.Status != TaskItemStatus.Done &&
-                x.CreatedAtUtc <= overdueThresholdUtc)
+                x.Status != TaskItemStatus.Done)
             .OrderBy(x => x.Id)
-            .Take(25)
+            .Take(100)
             .ToListAsync();
 
+        var sprintIds = tasks
+            .Where(x => x.SprintId.HasValue)
+            .Select(x => x.SprintId!.Value)
+            .Distinct()
+            .ToList();
+
+        var sprintsById = await db.Sprints
+            .Where(x => x.ProjectId == project.Id && sprintIds.Contains(x.Id) && x.EndDateLocal.HasValue)
+            .ToDictionaryAsync(x => x.Id);
+
+        var sentCount = 0;
         foreach (var task in tasks)
         {
-            var overdueBy = DateTimeOffset.UtcNow - task.CreatedAtUtc;
+            if (!task.SprintId.HasValue || !sprintsById.TryGetValue(task.SprintId.Value, out var sprint))
+            {
+                continue;
+            }
+
+            var endLocal = sprint.EndDateLocal!.Value;
+            var effectiveEndLocal = endLocal.TimeOfDay == TimeSpan.Zero
+                ? endLocal.Date.AddDays(1).AddTicks(-1)
+                : endLocal;
+            var overdueBy = localNowDateTime - effectiveEndLocal;
+            if (overdueBy <= TimeSpan.Zero)
+            {
+                continue;
+            }
+
             await _notificationService.NotifyOverdueTaskAsync(project.Id, task, overdueBy);
+            sentCount++;
         }
 
-        await FollowupAsync($"Quét quá hạn hoàn tất. Đã gửi {tasks.Count} thông báo nhắc việc.", ephemeral: true);
+        await FollowupAsync($"Quét quá hạn hoàn tất. Đã gửi {sentCount} thông báo nhắc việc.", ephemeral: true);
     }
 
     private async Task<Project?> ResolveProjectAsync(int? projectId)

@@ -84,21 +84,53 @@ public sealed class AutomationService(
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var localDate = _studioTime.LocalDate;
-        var overdueThresholdUtc = DateTimeOffset.UtcNow.AddHours(-24);
+        var localNowDateTime = localNow.DateTime;
 
         var candidates = await db.TaskItems
-            .Where(x => x.SprintId != null)
+            .Where(x =>
+                x.SprintId != null &&
+                x.Type == TaskItemType.Task &&
+                x.Status != TaskItemStatus.Done &&
+                (!x.LastOverdueReminderDateLocal.HasValue || x.LastOverdueReminderDateLocal.Value < localDate))
             .OrderBy(x => x.Id)
             .Take(1000)
             .ToListAsync(cancellationToken);
 
-        var overdueTasks = candidates
-            .Where(x =>
-                x.Type == TaskItemType.Task &&
-                x.Status != TaskItemStatus.Done &&
-                x.CreatedAtUtc <= overdueThresholdUtc &&
-                (!x.LastOverdueReminderDateLocal.HasValue || x.LastOverdueReminderDateLocal.Value < localDate))
-            .OrderBy(x => x.CreatedAtUtc)
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var sprintIds = candidates
+            .Where(x => x.SprintId.HasValue)
+            .Select(x => x.SprintId!.Value)
+            .Distinct()
+            .ToList();
+
+        var sprintsById = await db.Sprints
+            .Where(x => sprintIds.Contains(x.Id) && x.EndDateLocal.HasValue)
+            .ToDictionaryAsync(x => x.Id, cancellationToken);
+
+        var overdueTasks = new List<(TaskItem Task, TimeSpan OverdueBy)>();
+        foreach (var task in candidates)
+        {
+            if (!task.SprintId.HasValue || !sprintsById.TryGetValue(task.SprintId.Value, out var sprint))
+            {
+                continue;
+            }
+
+            var effectiveEndLocal = ResolveEffectiveSprintEndLocal(sprint.EndDateLocal!.Value);
+            var overdueBy = localNowDateTime - effectiveEndLocal;
+            if (overdueBy <= TimeSpan.Zero)
+            {
+                continue;
+            }
+
+            overdueTasks.Add((task, overdueBy));
+        }
+
+        overdueTasks = overdueTasks
+            .OrderByDescending(x => x.OverdueBy)
             .Take(100)
             .ToList();
 
@@ -107,11 +139,10 @@ public sealed class AutomationService(
             return;
         }
 
-        foreach (var task in overdueTasks)
+        foreach (var item in overdueTasks)
         {
-            var overdueBy = DateTimeOffset.UtcNow - task.CreatedAtUtc;
-            await _notificationService.NotifyOverdueTaskAsync(task.ProjectId, task, overdueBy, cancellationToken);
-            task.LastOverdueReminderDateLocal = localDate;
+            await _notificationService.NotifyOverdueTaskAsync(item.Task.ProjectId, item.Task, item.OverdueBy, cancellationToken);
+            item.Task.LastOverdueReminderDateLocal = localDate;
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -137,11 +168,7 @@ public sealed class AutomationService(
 
         foreach (var sprint in activeSprints)
         {
-            var endLocal = sprint.EndDateLocal!.Value;
-            // Backward-compatible: nếu mốc thời gian chỉ là ngày (00:00), coi hạn chót là cuối ngày.
-            var effectiveEnd = endLocal.TimeOfDay == TimeSpan.Zero
-                ? endLocal.Date.AddDays(1).AddTicks(-1)
-                : endLocal;
+            var effectiveEnd = ResolveEffectiveSprintEndLocal(sprint.EndDateLocal!.Value);
 
             if (localNow.DateTime < effectiveEnd)
             {
@@ -184,5 +211,13 @@ public sealed class AutomationService(
                 sprint.ProjectId,
                 localNow);
         }
+    }
+
+    private static DateTime ResolveEffectiveSprintEndLocal(DateTime endLocal)
+    {
+        // Backward-compatible: nếu mốc thời gian chỉ là ngày (00:00), coi hạn chót là cuối ngày.
+        return endLocal.TimeOfDay == TimeSpan.Zero
+            ? endLocal.Date.AddDays(1).AddTicks(-1)
+            : endLocal;
     }
 }
