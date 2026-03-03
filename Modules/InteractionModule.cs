@@ -1150,39 +1150,53 @@ public sealed class InteractionModule(
             .FirstOrDefaultAsync(x => x.ProjectId == project.Id && x.IsActive);
 
         var sprintId = activeSprint?.Id;
-        var todo = await db.TaskItems.CountAsync(
-            x => x.ProjectId == project.Id &&
-                 x.SprintId == sprintId &&
-                 x.Type == TaskItemType.Task &&
-                 x.Status == TaskItemStatus.Todo);
-        var inProgress = await db.TaskItems.CountAsync(
-            x => x.ProjectId == project.Id &&
-                 x.SprintId == sprintId &&
-                 x.Type == TaskItemType.Task &&
-                 x.Status == TaskItemStatus.InProgress);
-        var done = await db.TaskItems.CountAsync(
-            x => x.ProjectId == project.Id &&
-                 x.SprintId == sprintId &&
-                 x.Type == TaskItemType.Task &&
-                 x.Status == TaskItemStatus.Done);
+        var sprintTasksQuery = db.TaskItems
+            .AsNoTracking()
+            .Where(x => x.ProjectId == project.Id &&
+                        x.SprintId == sprintId &&
+                        x.Type == TaskItemType.Task);
+
+        var todoQuery = sprintTasksQuery.Where(x => x.Status == TaskItemStatus.Todo);
+        var inProgressQuery = sprintTasksQuery.Where(x => x.Status == TaskItemStatus.InProgress);
+        var doneQuery = sprintTasksQuery.Where(x => x.Status == TaskItemStatus.Done);
+
+        var todo = await todoQuery.CountAsync();
+        var inProgress = await inProgressQuery.CountAsync();
+        var done = await doneQuery.CountAsync();
         var backlog = await db.TaskItems.CountAsync(
             x => x.ProjectId == project.Id &&
                  x.SprintId == null &&
                  x.Type == TaskItemType.Task);
-        var openBugs = await db.TaskItems.CountAsync(
-            x => x.ProjectId == project.Id &&
-                 x.Type == TaskItemType.Bug &&
-                 x.Status != TaskItemStatus.Done);
-
-        var claimableTasks = await db.TaskItems
+        var bugQuery = db.TaskItems
             .AsNoTracking()
             .Where(x => x.ProjectId == project.Id &&
-                        x.SprintId == sprintId &&
-                        x.Type == TaskItemType.Task &&
-                        x.Status == TaskItemStatus.Todo &&
-                        x.AssigneeId == null)
+                        x.Type == TaskItemType.Bug &&
+                        x.Status != TaskItemStatus.Done);
+        var openBugs = await bugQuery.CountAsync();
+
+        var claimableCount = await todoQuery.CountAsync(x => x.AssigneeId == null);
+
+        var todoPreviewTasks = await todoQuery
+            .OrderBy(x => x.AssigneeId.HasValue)
+            .ThenByDescending(x => x.Points)
+            .ThenBy(x => x.Id)
+            .Take(4)
+            .ToListAsync();
+
+        var inProgressPreviewTasks = await inProgressQuery
+            .OrderByDescending(x => x.Points)
+            .ThenBy(x => x.Id)
+            .Take(4)
+            .ToListAsync();
+
+        var recentlyDoneTasks = await doneQuery
+            .OrderByDescending(x => x.Id)
+            .Take(4)
+            .ToListAsync();
+
+        var openBugPreviewTasks = await bugQuery
             .OrderBy(x => x.Id)
-            .Take(8)
+            .Take(4)
             .ToListAsync();
 
         var myFocusTasks = await db.TaskItems
@@ -1193,8 +1207,9 @@ public sealed class InteractionModule(
                         x.AssigneeId == Context.User.Id &&
                         x.Status != TaskItemStatus.Done)
             .OrderBy(x => x.Status)
+            .ThenByDescending(x => x.Points)
             .ThenBy(x => x.Id)
-            .Take(8)
+            .Take(5)
             .ToListAsync();
 
         var totalSprintTasks = todo + inProgress + done;
@@ -1207,25 +1222,38 @@ public sealed class InteractionModule(
             "\n",
             [
                 $"- 📜 **Tồn đọng:** `{backlog}`",
+                $"- 🎯 **Sẵn sàng nhận:** `{claimableCount}`",
                 $"- 🪓 **Cần làm:** `{todo}`",
                 $"- ⚔️ **Đang làm:** `{inProgress}`",
                 $"- 🏆 **Hoàn thành:** `{done}`",
                 $"- 🐞 **Lỗi mở:** `{openBugs}`"
             ]);
 
-        var queueText = claimableTasks.Count == 0
-            ? "💤 Chưa có nhiệm vụ trong hàng chờ."
-            : string.Join("\n\n", claimableTasks.Select(x =>
-                $"📌 Nhiệm vụ #{x.Id}\n" +
-                $"- **Tên:** **{Truncate(x.Title, 70)}**\n" +
-                $"- **Điểm:** `{x.Points}`"));
+        var todoPreviewText = BuildTaskPreviewList(
+            todoPreviewTasks,
+            "💤 Chưa có task nào ở cột cần làm.",
+            includeStatus: false);
 
-        var myFocusText = myFocusTasks.Count == 0
-            ? "🍃 Bạn chưa có nhiệm vụ đang xử lý."
-            : string.Join("\n\n", myFocusTasks.Select(x =>
-                $"🛡️ Nhiệm vụ #{x.Id}\n" +
-                $"- **Trạng thái:** {GetStatusBadge(x.Status)}\n" +
-                $"- **Tên:** **{Truncate(x.Title, 65)}**"));
+        var inProgressPreviewText = BuildTaskPreviewList(
+            inProgressPreviewTasks,
+            "🍃 Chưa có ai xử lý task nào.",
+            includeStatus: false);
+
+        var donePreviewText = BuildTaskPreviewList(
+            recentlyDoneTasks,
+            "⏳ Chưa có task nào hoàn thành trong chu kỳ này.",
+            includeStatus: false,
+            includeDescription: false);
+
+        var bugPreviewText = BuildTaskPreviewList(
+            openBugPreviewTasks,
+            "✅ Hiện không có lỗi mở.",
+            includeStatus: true);
+
+        var myFocusText = BuildTaskPreviewList(
+            myFocusTasks,
+            "🍃 Bạn chưa có nhiệm vụ đang xử lý.",
+            includeStatus: true);
 
         var embedColor = activeSprint is null
             ? Color.DarkGrey
@@ -1233,7 +1261,9 @@ public sealed class InteractionModule(
 
         var stateText = activeSprint is null
             ? "> ⚠️ Chưa có chu kỳ nào đang chạy. Trưởng nhóm/Quản trị hãy bắt đầu chu kỳ."
-            : $"- **Chu kỳ:** **{activeSprint.Name}**";
+            : $"- **Chu kỳ:** **{activeSprint.Name}**\n" +
+              $"- **Mục tiêu:** {FormatInlineText(activeSprint.Goal, "Chưa đặt mục tiêu", 90)}\n" +
+              $"- **Thời gian:** `{BuildSprintWindowText(activeSprint)}`";
 
         var embed = new EmbedBuilder()
             .WithTitle($"🗺️ Bảng Nhiệm Vụ Vương Quốc • {project.Name}")
@@ -1244,8 +1274,11 @@ public sealed class InteractionModule(
                 $"{stateText}\n" +
                 "━━━━━━━━━━━━━━━━━━━━")
             .AddField("📈 Tiến Độ", $"{progressBar}\n{completionText}", false)
-            .AddField("🧩 Bản Đồ Trạng Thái", laneSummary, true)
-            .AddField("🎯 Hàng Chờ Nhận Việc", queueText, true)
+            .AddField("🧩 Bản Đồ Trạng Thái", laneSummary, false)
+            .AddField("🪓 Cột Cần Làm", todoPreviewText, false)
+            .AddField("⚔️ Cột Đang Làm", inProgressPreviewText, false)
+            .AddField("🏆 Hoàn Thành Gần Đây", donePreviewText, false)
+            .AddField("🐞 Lỗi Đang Mở", bugPreviewText, false)
             .AddField("🧙 Việc Của Tôi", myFocusText, false)
             .WithFooter("Nhận nhiệm vụ tại đây để tránh trùng lặp và để theo dõi tiến độ toàn đội.")
             .WithCurrentTimestamp()
@@ -1254,7 +1287,7 @@ public sealed class InteractionModule(
         var components = new ComponentBuilder()
             .WithButton(
                 ButtonBuilder.CreateSuccessButton("⚔️ Nhận Nhiệm Vụ", $"board:claim:{project.Id}")
-                    .WithDisabled(activeSprint is null || claimableTasks.Count == 0))
+                    .WithDisabled(activeSprint is null || claimableCount == 0))
             .WithButton(
                 ButtonBuilder.CreatePrimaryButton("✅ Đánh Dấu Xong", $"board:done:{project.Id}")
                     .WithDisabled(activeSprint is null))
@@ -2567,6 +2600,88 @@ public sealed class InteractionModule(
         filled = Math.Clamp(filled, 0, width);
 
         return $"[{new string('=', filled)}{new string('.', width - filled)}] {(int)Math.Round(ratio * 100)}%";
+    }
+
+    private static string BuildTaskPreviewList(
+        IReadOnlyCollection<TaskItem> tasks,
+        string emptyText,
+        bool includeStatus,
+        bool includeDescription = true)
+    {
+        if (tasks.Count == 0)
+        {
+            return emptyText;
+        }
+
+        return string.Join(
+            "\n\n",
+            tasks.Select(x => BuildTaskPreviewLine(x, includeStatus, includeDescription)));
+    }
+
+    private static string BuildTaskPreviewLine(TaskItem task, bool includeStatus, bool includeDescription)
+    {
+        var meta = new List<string>();
+        if (includeStatus)
+        {
+            meta.Add(GetStatusBadge(task.Status));
+        }
+
+        meta.Add($"`{task.Points}đ`");
+        meta.Add(task.AssigneeId.HasValue ? $"<@{task.AssigneeId.Value}>" : "`Chưa nhận`");
+
+        var line =
+            $"`#{task.Id}` • **{Truncate(task.Title, 52)}**\n" +
+            $"- {string.Join(" • ", meta)}";
+
+        if (!includeDescription || string.IsNullOrWhiteSpace(task.Description))
+        {
+            return line;
+        }
+
+        var normalizedDescription = task.Description
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+
+        return $"{line}\n- {Truncate(normalizedDescription, 90)}";
+    }
+
+    private static string BuildSprintWindowText(Sprint sprint)
+    {
+        if (!sprint.StartDateLocal.HasValue || !sprint.EndDateLocal.HasValue)
+        {
+            return "Chưa thiết lập";
+        }
+
+        return $"{FormatSprintMoment(sprint.StartDateLocal)} -> {FormatSprintMoment(sprint.EndDateLocal)} (UTC+7)";
+    }
+
+    private static string FormatInlineText(string? input, string fallback, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return fallback;
+        }
+
+        var normalized = input
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+
+        return Truncate(normalized, maxLength);
+    }
+
+    private static string FormatSprintMoment(DateTime? value)
+    {
+        if (!value.HasValue)
+        {
+            return "Chưa đặt";
+        }
+
+        var date = value.Value;
+        return date.TimeOfDay == TimeSpan.Zero
+            ? date.ToString("yyyy-MM-dd")
+            : date.ToString("yyyy-MM-dd HH:mm");
     }
 
     private static MessageComponent BuildAdminPanelComponents(int projectId, bool isAdmin)

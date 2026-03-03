@@ -21,6 +21,8 @@ Hoặc trên Windows:
 .\run.bat
 ```
 
+Nếu muốn dùng tính năng phát nhạc YouTube, hãy cài `ffmpeg` và thêm vào `PATH`, hoặc đặt biến môi trường `FFMPEG_PATH` tới file thực thi `ffmpeg.exe`.
+
 ## Theo Dõi Push Từ Repo Game (GitHub)
 
 Bot hỗ trợ theo dõi **repo GitHub bên ngoài** (repo game của bạn), không phụ thuộc repo source của bot.
@@ -39,6 +41,24 @@ Bot hỗ trợ theo dõi **repo GitHub bên ngoài** (repo game của bạn), kh
    - Hoặc chỉ gỡ 1 nhánh cụ thể: `/project github-unbind repository:<owner/repo-that> branch:main`
 
 Thông báo push sẽ gửi vào kênh `#github-commits` (hoặc kênh bạn chỉ định khi bind).
+
+## Phát Nhạc YouTube Trong Voice
+
+Bot hỗ trợ phát audio từ YouTube ngay trong voice channel.
+
+1. Vào voice channel trước.
+2. Phát một video:
+   - `/music play video:<YouTube URL hoặc video ID>`
+3. Xem trạng thái hiện tại:
+   - `/music now`
+4. Dừng bài nhưng giữ bot trong voice:
+   - `/music stop`
+5. Dừng và rời voice:
+   - `/music leave`
+
+Lưu ý:
+- Bot cần quyền `Connect` và `Speak` trong voice channel.
+- Tính năng này hiện phát 1 bài mỗi guild; gọi `/music play` lần nữa sẽ thay bài đang phát.
 
 ## Lưu Ý Bảo Mật
 

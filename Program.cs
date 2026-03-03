@@ -45,6 +45,7 @@ builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddSingleton<YouTubeMusicService>();
 builder.Services.AddHttpClient("GitHubTracking", client =>
 {
     client.DefaultRequestHeaders.UserAgent.ParseAdd("ProjectManagerBot/1.0");
