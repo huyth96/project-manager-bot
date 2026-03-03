@@ -1998,16 +1998,16 @@ public sealed class InteractionModule(
         }
 
         task.AssigneeId = assigneeId;
-        if (task.Status == TaskItemStatus.Backlog)
+        if (task.Status != TaskItemStatus.Done)
         {
-            task.Status = TaskItemStatus.Todo;
+            task.Status = TaskItemStatus.InProgress;
         }
 
         await db.SaveChangesAsync();
         await _projectService.RefreshDashboardMessageAsync(projectId);
         await _notificationService.NotifyTaskAssignedAsync(projectId, Context.User.Id, assigneeId, task);
 
-        await RespondTransientAsync($"Đã giao nhiệm vụ `#{task.Id}` cho <@{assigneeId}>.");
+        await RespondTransientAsync($"Đã giao nhiệm vụ `#{task.Id}` cho <@{assigneeId}> và chuyển sang trạng thái Đang Làm.");
     }
 
     [ComponentInteraction("standup:report:*", true)]
