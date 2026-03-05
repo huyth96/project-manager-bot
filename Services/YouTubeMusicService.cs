@@ -156,7 +156,8 @@ public sealed class YouTubeMusicService(
         }
 
         var isConnected = player.ConnectionState.IsConnected || discordVoiceChannelId.HasValue;
-        var isPlaying = player.State is PlayerState.Playing;
+        var hasTrack = player.CurrentTrack is not null;
+        var isPlaying = player.State is PlayerState.Playing or PlayerState.Paused || (isConnected && hasTrack);
         var voiceChannelId = player.ConnectionState.IsConnected ? player.VoiceChannelId : discordVoiceChannelId;
 
         return new MusicPlaybackStatus(

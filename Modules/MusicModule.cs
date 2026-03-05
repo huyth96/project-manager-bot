@@ -48,30 +48,40 @@ public sealed class MusicModule(
     [SlashCommand("now", "Xem trang thai phat nhac hien tai cua bot.")]
     public async Task NowAsync()
     {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
         var status = _musicService.GetStatus(Context.Guild.Id);
         if (!status.IsConnected)
         {
-            await SendInteractionMessageAsync("Bot chua ket noi voice channel nao.", ephemeral: true);
+            await SendFollowupAsync("Bot chua ket noi voice channel nao.", ephemeral: true);
             return;
         }
 
         if (!status.IsPlaying)
         {
             var channelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
-            await SendInteractionMessageAsync($"Bot dang o {channelText} nhung chua phat bai nao.", ephemeral: true);
+            await SendFollowupAsync($"Bot dang o {channelText} nhung chua phat bai nao.", ephemeral: true);
             return;
         }
 
         var title = status.CurrentTitle ?? "Khong ro tieu de";
         var voiceChannelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
-        await SendInteractionMessageAsync($"Dang phat `{title}` trong {voiceChannelText}.", ephemeral: true);
+        await SendFollowupAsync($"Dang phat `{title}` trong {voiceChannelText}.", ephemeral: true);
     }
 
     [SlashCommand("stop", "Dung bai dang phat nhung van o lai voice channel.")]
     public async Task StopAsync()
     {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
-        await SendInteractionMessageAsync(
+        await SendFollowupAsync(
             stopped ? "Da dung phat nhac." : "Hien khong co bai nao dang phat.",
             ephemeral: true);
     }
@@ -79,8 +89,13 @@ public sealed class MusicModule(
     [SlashCommand("leave", "Dung nhac va roi khoi voice channel.")]
     public async Task LeaveAsync()
     {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
         var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
-        await SendInteractionMessageAsync(
+        await SendFollowupAsync(
             disconnected ? "Da dung nhac va roi voice channel." : "Bot chua o voice channel nao.",
             ephemeral: true);
     }
