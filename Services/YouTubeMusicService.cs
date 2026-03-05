@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net.Http;
 using Discord;
 using Discord.Audio;
 using YoutubeExplode;
@@ -25,13 +26,30 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
             throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
         }
 
-        var resolvedTrack = await ResolveTrackAsync(videoReference.Trim());
+        var trimmedReference = videoReference.Trim();
+        _logger.LogDebug(
+            "PlayAsync started for guild {GuildId}. VoiceChannelId={VoiceChannelId}, VideoReference={VideoReference}",
+            guildId,
+            targetChannel.Id,
+            ToSafeReference(trimmedReference));
+
+        var resolvedTrack = await ResolveTrackAsync(trimmedReference);
+        _logger.LogDebug(
+            "Resolved track for guild {GuildId}: Title={TrackTitle}, VideoUrl={VideoUrl}",
+            guildId,
+            resolvedTrack.Title,
+            resolvedTrack.VideoUrl);
         var session = _sessions.GetOrAdd(guildId, _ => new GuildMusicSession());
 
         await session.CommandGate.WaitAsync(cancellationToken);
         try
         {
             var detachedPlayback = DetachPlayback(session);
+            if (detachedPlayback.HasPlayback)
+            {
+                _logger.LogDebug("Existing playback detected for guild {GuildId}. Cancelling previous playback first.", guildId);
+            }
+
             await CancelPlaybackAsync(detachedPlayback);
 
             var audioClient = await EnsureConnectedAsync(session, targetChannel);
@@ -63,6 +81,13 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
                     session.ActivePlaybackTask = playbackTask;
                 }
             }
+
+            _logger.LogInformation(
+                "Playback task started for guild {GuildId}: {TrackTitle} ({VideoUrl}) in voice channel {VoiceChannelId}.",
+                guildId,
+                resolvedTrack.Title,
+                resolvedTrack.VideoUrl,
+                targetChannel.Id);
 
             return new MusicPlayResult(
                 Title: resolvedTrack.Title,
@@ -146,9 +171,13 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
 
     private async Task<ResolvedTrack> ResolveTrackAsync(string videoReference)
     {
+        _logger.LogDebug("Resolving YouTube video reference: {VideoReference}", ToSafeReference(videoReference));
+
         try
         {
             var video = await _youtubeClient.Videos.GetAsync(videoReference);
+            _logger.LogDebug("Fetched video metadata. VideoId={VideoId}, Title={TrackTitle}", video.Id, video.Title);
+
             var manifest = await _youtubeClient.Videos.Streams.GetManifestAsync(video.Id);
             var audioStream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
 
@@ -162,13 +191,45 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
                 VideoUrl: $"https://www.youtube.com/watch?v={video.Id}",
                 StreamUrl: audioStream.Url);
         }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Invalid YouTube reference format. VideoReference={VideoReference}",
+                ToSafeReference(videoReference));
+
+            throw new InvalidOperationException("Không thể đọc video YouTube. Hãy dùng URL hoặc video ID hợp lệ.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Network/HTTP error while resolving YouTube reference. VideoReference={VideoReference}",
+                ToSafeReference(videoReference));
+
+            throw new InvalidOperationException("Không thể truy cập YouTube lúc này. Hãy thử lại sau.");
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Timeout while resolving YouTube reference. VideoReference={VideoReference}",
+                ToSafeReference(videoReference));
+
+            throw new InvalidOperationException("Hết thời gian chờ khi truy cập YouTube. Hãy thử lại.");
+        }
         catch (InvalidOperationException)
         {
             throw;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Không thể phân giải video YouTube từ đầu vào: {VideoReference}", videoReference);
+            _logger.LogWarning(
+                ex,
+                "Unexpected error while resolving YouTube reference. ExceptionType={ExceptionType}, VideoReference={VideoReference}",
+                ex.GetType().FullName,
+                ToSafeReference(videoReference));
+
             throw new InvalidOperationException("Không thể đọc video YouTube. Hãy dùng URL hoặc video ID hợp lệ.");
         }
     }
@@ -192,14 +253,17 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
 
         if (clientToStop is not null)
         {
+            _logger.LogDebug("Switching voice channel to {VoiceChannelId}. Stopping previous audio client first.", targetChannel.Id);
             await SafeStopAudioClientAsync(clientToStop);
         }
 
         if (currentClient is not null)
         {
+            _logger.LogDebug("Reusing existing audio client for voice channel {VoiceChannelId}.", targetChannel.Id);
             return currentClient;
         }
 
+        _logger.LogDebug("Connecting bot to voice channel {VoiceChannelId}.", targetChannel.Id);
         var connectedClient = await targetChannel.ConnectAsync(selfDeaf: true);
         lock (session.StateGate)
         {
@@ -270,6 +334,12 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
         string? standardError = null;
         var standardErrorTask = ffmpeg.StandardError.ReadToEndAsync();
 
+        _logger.LogDebug(
+            "RunPlaybackAsync started for guild {GuildId}: TrackTitle={TrackTitle}, VideoUrl={VideoUrl}",
+            guildId,
+            trackTitle,
+            videoUrl);
+
         try
         {
             using var discordStream = audioClient.CreatePCMStream(AudioApplication.Music);
@@ -280,6 +350,7 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             wasCancelled = true;
+            _logger.LogDebug("Playback cancelled for guild {GuildId}: {TrackTitle}", guildId, trackTitle);
         }
         catch (Exception ex)
         {
@@ -311,11 +382,20 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
             if (!wasCancelled && ffmpeg.ExitCode != 0)
             {
                 _logger.LogWarning(
-                    "FFmpeg thoát với mã {ExitCode} khi phát {TrackTitle} ({VideoUrl}). stderr: {StandardError}",
+                    "FFmpeg exited with code {ExitCode} while playing {TrackTitle} ({VideoUrl}). stderr: {StandardError}",
                     ffmpeg.ExitCode,
                     trackTitle,
                     videoUrl,
-                    string.IsNullOrWhiteSpace(standardError) ? "<empty>" : standardError);
+                    string.IsNullOrWhiteSpace(standardError) ? "<empty>" : TruncateForLog(standardError));
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "RunPlaybackAsync finished for guild {GuildId}: ExitCode={ExitCode}, WasCancelled={WasCancelled}, TrackTitle={TrackTitle}",
+                    guildId,
+                    ffmpeg.ExitCode,
+                    wasCancelled,
+                    trackTitle);
             }
 
             lock (session.StateGate)
@@ -336,9 +416,11 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
 
     private Process StartFfmpeg(string inputUrl)
     {
+        var executable = ResolveFfmpegExecutable();
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = ResolveFfmpegExecutable(),
+            FileName = executable,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -367,12 +449,13 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
 
         try
         {
+            _logger.LogDebug("Starting FFmpeg. Executable={Executable}, InputUrl={InputUrl}", executable, ToSafeReference(inputUrl));
             return Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Không thể khởi chạy FFmpeg để phát nhạc.");
         }
         catch (Win32Exception ex)
         {
-            _logger.LogWarning(ex, "Không tìm thấy FFmpeg tại cấu hình hiện tại");
+            _logger.LogWarning(ex, "FFmpeg not found at current configuration.");
             throw new InvalidOperationException(
                 "Không tìm thấy FFmpeg. Hãy cài FFmpeg vào PATH hoặc đặt biến môi trường FFMPEG_PATH.");
         }
@@ -406,6 +489,20 @@ public sealed class YouTubeMusicService(ILogger<YouTubeMusicService> logger)
         var configuredPath = Environment.GetEnvironmentVariable("FFMPEG_PATH");
         return string.IsNullOrWhiteSpace(configuredPath) ? "ffmpeg" : configuredPath.Trim();
     }
+
+    private static string ToSafeReference(string value, int maxLength = 180)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "<empty>";
+        }
+
+        var compact = value.Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+        return compact.Length <= maxLength ? compact : $"{compact[..maxLength]}...";
+    }
+
+    private static string TruncateForLog(string value, int maxLength = 600)
+        => value.Length <= maxLength ? value : $"{value[..maxLength]}...";
 
     private sealed class GuildMusicSession
     {
