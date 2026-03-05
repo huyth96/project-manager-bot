@@ -28,20 +28,20 @@ public sealed class MusicModule(
 
         if (Context.User is not SocketGuildUser guildUser || guildUser.VoiceChannel is not IVoiceChannel voiceChannel)
         {
-            await SendInteractionMessageAsync("Ban can vao voice channel truoc khi dung `/music play`.", ephemeral: true);
+            await SendFollowupAsync("Ban can vao voice channel truoc khi dung `/music play`.", ephemeral: true);
             return;
         }
 
         try
         {
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, video);
-            await SendInteractionMessageAsync(
+            await SendFollowupAsync(
                 $"Dang phat `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
                 ephemeral: true);
         }
         catch (InvalidOperationException ex)
         {
-            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+            await SendFollowupAsync(ex.Message, ephemeral: true);
         }
     }
 

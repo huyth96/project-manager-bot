@@ -1,5 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 using Discord;
+using Discord.WebSocket;
 using Lavalink4NET;
 using Lavalink4NET.DiscordNet;
 using Lavalink4NET.Players;
@@ -8,11 +9,13 @@ namespace ProjectManagerBot.Services;
 
 public sealed class YouTubeMusicService(
     IAudioService audioService,
+    DiscordSocketClient discordClient,
     ILogger<YouTubeMusicService> logger)
 {
     private static readonly Regex YouTubeIdRegex = new("^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled);
 
     private readonly IAudioService _audioService = audioService;
+    private readonly DiscordSocketClient _discordClient = discordClient;
     private readonly ILogger<YouTubeMusicService> _logger = logger;
 
     public async Task<MusicPlayResult> PlayAsync(
@@ -141,19 +144,26 @@ public sealed class YouTubeMusicService(
 
     public MusicPlaybackStatus GetStatus(ulong guildId)
     {
+        var discordVoiceChannelId = TryGetBotVoiceChannelId(guildId);
+
         if (!TryGetPlayer(guildId, out var player))
         {
-            return new MusicPlaybackStatus(false, false, null, null);
+            return new MusicPlaybackStatus(
+                IsConnected: discordVoiceChannelId.HasValue,
+                IsPlaying: false,
+                CurrentTitle: null,
+                VoiceChannelId: discordVoiceChannelId);
         }
 
-        var isConnected = player.ConnectionState.IsConnected;
+        var isConnected = player.ConnectionState.IsConnected || discordVoiceChannelId.HasValue;
         var isPlaying = player.State is PlayerState.Playing;
+        var voiceChannelId = player.ConnectionState.IsConnected ? player.VoiceChannelId : discordVoiceChannelId;
 
         return new MusicPlaybackStatus(
             IsConnected: isConnected,
             IsPlaying: isPlaying,
             CurrentTitle: player.CurrentTrack?.Title,
-            VoiceChannelId: isConnected ? player.VoiceChannelId : null);
+            VoiceChannelId: voiceChannelId);
     }
 
     private bool TryGetPlayer(ulong guildId, out LavalinkPlayer player)
@@ -183,6 +193,17 @@ public sealed class YouTubeMusicService(
             _logger.LogWarning(ex, "Lavalink is not ready.");
             throw new InvalidOperationException("Lavalink chua san sang. Hay kiem tra node Lavalink truoc khi phat nhac.");
         }
+    }
+
+    private ulong? TryGetBotVoiceChannelId(ulong guildId)
+    {
+        var guild = _discordClient.GetGuild(guildId);
+        if (guild is null || guild.CurrentUser is null)
+        {
+            return null;
+        }
+
+        return guild.CurrentUser.VoiceChannel?.Id;
     }
 
     private static string ToSafeReference(string value, int maxLength = 180)
