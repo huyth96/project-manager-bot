@@ -1,6 +1,7 @@
 ﻿using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
+using Lavalink4NET.Extensions;
 using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Data;
 using ProjectManagerBot.Options;
@@ -13,6 +14,7 @@ ApplyEnvironmentOverrides(builder.Configuration);
 
 builder.Services.Configure<DiscordBotOptions>(builder.Configuration.GetSection("Discord"));
 builder.Services.Configure<GitHubTrackingOptions>(builder.Configuration.GetSection("GitHub"));
+builder.Services.Configure<LavalinkOptions>(builder.Configuration.GetSection("Lavalink"));
 
 builder.Services.AddDbContextFactory<BotDbContext>(options =>
 {
@@ -45,6 +47,18 @@ builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<NotificationService>();
+
+builder.Services.AddLavalink();
+builder.Services.ConfigureLavalink(options =>
+{
+    var config = builder.Configuration.GetSection("Lavalink").Get<LavalinkOptions>() ?? new LavalinkOptions();
+
+    options.BaseAddress = new Uri(config.BaseAddress);
+    options.WebSocketUri = new Uri(config.WebSocketUri);
+    options.Passphrase = config.Passphrase;
+    options.Label = config.Label;
+    options.ReadyTimeout = TimeSpan.FromSeconds(Math.Max(1, config.ReadyTimeoutSeconds));
+});
 builder.Services.AddSingleton<YouTubeMusicService>();
 builder.Services.AddHttpClient("GitHubTracking", client =>
 {
@@ -128,6 +142,36 @@ static void ApplyEnvironmentOverrides(ConfigurationManager configuration)
     if (bool.TryParse(gitHubEnabledRaw, out var gitHubEnabled))
     {
         configuration["GitHub:Enabled"] = gitHubEnabled.ToString();
+    }
+
+    var lavalinkBaseAddress = Environment.GetEnvironmentVariable("LAVALINK_BASE_ADDRESS");
+    if (!string.IsNullOrWhiteSpace(lavalinkBaseAddress))
+    {
+        configuration["Lavalink:BaseAddress"] = lavalinkBaseAddress.Trim();
+    }
+
+    var lavalinkWebSocketUri = Environment.GetEnvironmentVariable("LAVALINK_WEBSOCKET_URI");
+    if (!string.IsNullOrWhiteSpace(lavalinkWebSocketUri))
+    {
+        configuration["Lavalink:WebSocketUri"] = lavalinkWebSocketUri.Trim();
+    }
+
+    var lavalinkPassphrase = Environment.GetEnvironmentVariable("LAVALINK_PASSPHRASE");
+    if (!string.IsNullOrWhiteSpace(lavalinkPassphrase))
+    {
+        configuration["Lavalink:Passphrase"] = lavalinkPassphrase.Trim();
+    }
+
+    var lavalinkLabel = Environment.GetEnvironmentVariable("LAVALINK_LABEL");
+    if (!string.IsNullOrWhiteSpace(lavalinkLabel))
+    {
+        configuration["Lavalink:Label"] = lavalinkLabel.Trim();
+    }
+
+    var lavalinkReadyTimeoutRaw = Environment.GetEnvironmentVariable("LAVALINK_READY_TIMEOUT_SECONDS");
+    if (int.TryParse(lavalinkReadyTimeoutRaw, out var lavalinkReadyTimeout))
+    {
+        configuration["Lavalink:ReadyTimeoutSeconds"] = lavalinkReadyTimeout.ToString();
     }
 }
 
@@ -253,3 +297,7 @@ static async Task EnsureGitHubRepoBindingsTableAsync(BotDbContext db)
         "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_GitHubRepoBindings_ProjectId_RepoFullName_Branch\" " +
         "ON \"GitHubRepoBindings\" (\"ProjectId\", \"RepoFullName\", \"Branch\");");
 }
+
+
+
+

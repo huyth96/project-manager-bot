@@ -21,7 +21,7 @@ Hoặc trên Windows:
 .\run.bat
 ```
 
-Nếu muốn dùng tính năng phát nhạc YouTube, hãy cài `ffmpeg` và thêm vào `PATH`, hoặc đặt biến môi trường `FFMPEG_PATH` tới file thực thi `ffmpeg.exe`.
+Nếu muốn dùng tính năng phát nhạc YouTube, hãy chạy một node Lavalink và cấu hình các biến `LAVALINK_*` trong `.env` (xem `.env.example`).
 
 ## Theo Dõi Push Từ Repo Game (GitHub)
 
@@ -42,9 +42,15 @@ Bot hỗ trợ theo dõi **repo GitHub bên ngoài** (repo game của bạn), kh
 
 Thông báo push sẽ gửi vào kênh `#github-commits` (hoặc kênh bạn chỉ định khi bind).
 
-## Phát Nhạc YouTube Trong Voice
+## Phát Nhạc YouTube Trong Voice (Lavalink)
 
 Bot hỗ trợ phát audio từ YouTube ngay trong voice channel.
+
+Trước khi chạy bot, bạn cần một node Lavalink đang hoạt động:
+
+1. Chạy Lavalink server (mặc định `http://127.0.0.1:2333`, websocket `ws://127.0.0.1:2333/v4/websocket`).
+2. Đảm bảo passphrase Lavalink trùng với cấu hình trong `.env`/`appsettings.json`.
+3. Khởi động bot.
 
 1. Vào voice channel trước.
 2. Phát một video:
@@ -59,6 +65,7 @@ Bot hỗ trợ phát audio từ YouTube ngay trong voice channel.
 Lưu ý:
 - Bot cần quyền `Connect` và `Speak` trong voice channel.
 - Tính năng này hiện phát 1 bài mỗi guild; gọi `/music play` lần nữa sẽ thay bài đang phát.
+- Nếu bot báo Lavalink chưa sẵn sàng, hãy kiểm tra lại node Lavalink trước.
 
 ## Lưu Ý Bảo Mật
 
