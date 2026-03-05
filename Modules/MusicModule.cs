@@ -1,118 +1,163 @@
-using Discord;
+﻿using Discord;
 using Discord.Interactions;
+using Discord.Net;
 using Discord.WebSocket;
 using ProjectManagerBot.Services;
 
 namespace ProjectManagerBot.Modules;
 
-[Group("music", "Phát nhạc YouTube trong voice channel.")]
+[Group("music", "Phat nhac YouTube trong voice channel.")]
 [RequireContext(ContextType.Guild)]
 public sealed class MusicModule(
-    YouTubeMusicService musicService) : InteractionModuleBase<SocketInteractionContext>
+    YouTubeMusicService musicService,
+    ILogger<MusicModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
     private readonly YouTubeMusicService _musicService = musicService;
+    private readonly ILogger<MusicModule> _logger = logger;
 
-    [SlashCommand("play", "Phát nhạc YouTube trong voice channel bạn đang tham gia.")]
+    [SlashCommand("play", "Phat nhac YouTube trong voice channel ban dang tham gia.")]
     public async Task PlayAsync(
-        [Summary("video", "URL hoặc video ID YouTube")]
+        [Summary("video", "URL hoac video ID YouTube")]
         string video)
     {
-        if (Context.User is not SocketGuildUser guildUser || guildUser.VoiceChannel is not IVoiceChannel voiceChannel)
+        if (!await TryAcknowledgeAsync(ephemeral: true))
         {
-            await RespondAsync("Bạn cần vào voice channel trước khi dùng `/music play`.", ephemeral: true);
             return;
         }
 
-        await DeferAsync(ephemeral: true);
+        if (Context.User is not SocketGuildUser guildUser || guildUser.VoiceChannel is not IVoiceChannel voiceChannel)
+        {
+            await SendInteractionMessageAsync("Ban can vao voice channel truoc khi dung `/music play`.", ephemeral: true);
+            return;
+        }
 
         try
         {
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, video);
-            await FollowupAsync(
-                $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
+            await SendInteractionMessageAsync(
+                $"Dang phat `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
                 ephemeral: true);
         }
         catch (InvalidOperationException ex)
         {
-            await FollowupAsync(ex.Message, ephemeral: true);
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
         }
     }
 
-    [SlashCommand("now", "Xem trạng thái phát nhạc hiện tại của bot.")]
+    [SlashCommand("now", "Xem trang thai phat nhac hien tai cua bot.")]
     public async Task NowAsync()
     {
         var status = _musicService.GetStatus(Context.Guild.Id);
         if (!status.IsConnected)
         {
-            await RespondAsync("Bot chưa kết nối voice channel nào.", ephemeral: true);
+            await SendInteractionMessageAsync("Bot chua ket noi voice channel nao.", ephemeral: true);
             return;
         }
 
         if (!status.IsPlaying)
         {
-            var channelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hiện tại";
-            await RespondAsync($"Bot đang ở {channelText} nhưng chưa phát bài nào.", ephemeral: true);
+            var channelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
+            await SendInteractionMessageAsync($"Bot dang o {channelText} nhung chua phat bai nao.", ephemeral: true);
             return;
         }
 
-        var title = status.CurrentTitle ?? "Không rõ tiêu đề";
-        var voiceChannelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hiện tại";
-        await RespondAsync($"Đang phát `{title}` trong {voiceChannelText}.", ephemeral: true);
+        var title = status.CurrentTitle ?? "Khong ro tieu de";
+        var voiceChannelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
+        await SendInteractionMessageAsync($"Dang phat `{title}` trong {voiceChannelText}.", ephemeral: true);
     }
 
-    [SlashCommand("stop", "Dừng bài đang phát nhưng vẫn ở lại voice channel.")]
+    [SlashCommand("stop", "Dung bai dang phat nhung van o lai voice channel.")]
     public async Task StopAsync()
     {
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
-        await RespondAsync(
-            stopped ? "Đã dừng phát nhạc." : "Hiện không có bài nào đang phát.",
+        await SendInteractionMessageAsync(
+            stopped ? "Da dung phat nhac." : "Hien khong co bai nao dang phat.",
             ephemeral: true);
     }
 
-    [SlashCommand("leave", "Dừng nhạc và rời khỏi voice channel.")]
+    [SlashCommand("leave", "Dung nhac va roi khoi voice channel.")]
     public async Task LeaveAsync()
     {
         var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
-        await RespondAsync(
-            disconnected ? "Đã dừng nhạc và rời voice channel." : "Bot chưa ở voice channel nào.",
+        await SendInteractionMessageAsync(
+            disconnected ? "Da dung nhac va roi voice channel." : "Bot chua o voice channel nao.",
             ephemeral: true);
     }
 
-    private async Task RespondAsync(
-        string? text = null,
-        Embed? embed = null,
-        MessageComponent? components = null,
-        bool ephemeral = false)
+    private async Task<bool> TryAcknowledgeAsync(bool ephemeral)
     {
-        await base.RespondAsync(
-            text: text,
-            embed: embed,
-            components: components,
-            ephemeral: ephemeral);
-
-        if (ephemeral)
+        if (Context.Interaction.HasResponded)
         {
-            _ = DeleteOriginalResponseAfterDelayAsync(TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
+            return true;
+        }
+
+        try
+        {
+            await DeferAsync(ephemeral: ephemeral);
+            return true;
+        }
+        catch (HttpException ex) when (IsInteractionAlreadyAcknowledged(ex))
+        {
+            return true;
+        }
+        catch (HttpException ex) when (IsUnknownInteraction(ex))
+        {
+            _logger.LogWarning(ex, "Interaction expired before defer for /music command.");
+            return false;
         }
     }
 
-    private async Task FollowupAsync(
-        string? text = null,
-        Embed? embed = null,
-        MessageComponent? components = null,
-        bool ephemeral = false)
+    private async Task SendInteractionMessageAsync(string text, bool ephemeral)
     {
-        var message = await base.FollowupAsync(
-            text: text,
-            embed: embed,
-            components: components,
-            ephemeral: ephemeral);
-
-        if (ephemeral)
+        if (Context.Interaction.HasResponded)
         {
-            _ = DeleteFollowupAfterDelayAsync(message, TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
+            await SendFollowupAsync(text, ephemeral);
+            return;
         }
+
+        try
+        {
+            await base.RespondAsync(text: text, ephemeral: ephemeral);
+            if (ephemeral)
+            {
+                _ = DeleteOriginalResponseAfterDelayAsync(TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
+            }
+        }
+        catch (HttpException ex) when (IsInteractionAlreadyAcknowledged(ex))
+        {
+            await SendFollowupAsync(text, ephemeral);
+        }
+        catch (HttpException ex) when (IsUnknownInteraction(ex))
+        {
+            _logger.LogWarning(ex, "Interaction expired before initial response for /music command.");
+        }
+    }
+
+    private async Task SendFollowupAsync(string text, bool ephemeral)
+    {
+        try
+        {
+            var message = await base.FollowupAsync(text: text, ephemeral: ephemeral);
+            if (ephemeral)
+            {
+                _ = DeleteFollowupAfterDelayAsync(message, TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
+            }
+        }
+        catch (HttpException ex) when (IsUnknownInteraction(ex))
+        {
+            _logger.LogWarning(ex, "Interaction expired before follow-up response for /music command.");
+        }
+    }
+
+    private static bool IsInteractionAlreadyAcknowledged(HttpException exception)
+    {
+        return exception.DiscordCode.HasValue && (int)exception.DiscordCode.Value == 40060;
+    }
+
+    private static bool IsUnknownInteraction(HttpException exception)
+    {
+        return exception.DiscordCode.HasValue && (int)exception.DiscordCode.Value == 10062;
     }
 
     private async Task DeleteOriginalResponseAfterDelayAsync(TimeSpan delay)
