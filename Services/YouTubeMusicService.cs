@@ -13,6 +13,8 @@ public sealed class YouTubeMusicService(
     ILogger<YouTubeMusicService> logger)
 {
     private static readonly Regex YouTubeIdRegex = new("^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled);
+    private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PathVideoIdRegex = new(@"^[a-zA-Z0-9_-]{11}", RegexOptions.Compiled);
 
     private readonly IAudioService _audioService = audioService;
     private readonly DiscordSocketClient _discordClient = discordClient;
@@ -226,17 +228,111 @@ public sealed class YouTubeMusicService(
             throw new InvalidOperationException("Hay nhap URL hoac video ID YouTube hop le.");
         }
 
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        if (TryExtractYouTubeVideoId(trimmed, out var videoId))
         {
-            return absoluteUri.ToString();
+            return $"https://www.youtube.com/watch?v={videoId}";
         }
 
-        if (YouTubeIdRegex.IsMatch(trimmed))
+        var urlMatch = UrlRegex.Match(trimmed);
+        if (urlMatch.Success)
         {
-            return $"https://www.youtube.com/watch?v={trimmed}";
+            var candidateUrl = TrimTrailingUrlPunctuation(urlMatch.Value);
+            if (TryExtractYouTubeVideoId(candidateUrl, out videoId))
+            {
+                return $"https://www.youtube.com/watch?v={videoId}";
+            }
         }
 
         throw new InvalidOperationException("Hay nhap URL hoac video ID YouTube hop le.");
+    }
+
+    private static string TrimTrailingUrlPunctuation(string value)
+    {
+        return value.TrimEnd('.', ',', ';', ':', ')', ']', '}', '"', '\'');
+    }
+
+    private static bool TryExtractYouTubeVideoId(string value, out string videoId)
+    {
+        var trimmed = value.Trim();
+        if (YouTubeIdRegex.IsMatch(trimmed))
+        {
+            videoId = trimmed;
+            return true;
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        {
+            videoId = string.Empty;
+            return false;
+        }
+
+        return TryExtractYouTubeVideoId(absoluteUri, out videoId);
+    }
+
+    private static bool TryExtractYouTubeVideoId(Uri uri, out string videoId)
+    {
+        var host = uri.Host.ToLowerInvariant();
+
+        if (host == "youtu.be")
+        {
+            return TryReadVideoId(uri.AbsolutePath.Trim('/'), out videoId);
+        }
+
+        if (host == "youtube.com" || host.EndsWith(".youtube.com", StringComparison.Ordinal))
+        {
+            foreach (var part in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var kv = part.Split('=', 2);
+                if (kv.Length == 0)
+                {
+                    continue;
+                }
+
+                var key = Uri.UnescapeDataString(kv[0]);
+                if (!key.Equals("v", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var rawValue = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
+                if (TryReadVideoId(rawValue, out videoId))
+                {
+                    return true;
+                }
+            }
+
+            var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 2 && (segments[0] is "shorts" or "embed" or "live"))
+            {
+                if (TryReadVideoId(segments[1], out videoId))
+                {
+                    return true;
+                }
+            }
+        }
+
+        videoId = string.Empty;
+        return false;
+    }
+
+    private static bool TryReadVideoId(string rawValue, out string videoId)
+    {
+        var match = PathVideoIdRegex.Match(rawValue.Trim());
+        if (!match.Success)
+        {
+            videoId = string.Empty;
+            return false;
+        }
+
+        var candidate = match.Value;
+        if (!YouTubeIdRegex.IsMatch(candidate))
+        {
+            videoId = string.Empty;
+            return false;
+        }
+
+        videoId = candidate;
+        return true;
     }
 }
 
