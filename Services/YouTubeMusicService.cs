@@ -734,22 +734,20 @@ public sealed class YouTubeMusicService
 
         var embed = new EmbedBuilder()
             .WithTitle(MusicPanelConstants.PanelTitle)
-            .WithColor(status.IsPlaying ? Color.Green : status.IsConnected ? Color.Orange : Color.DarkGrey)
-            .WithDescription(
-                string.IsNullOrWhiteSpace(currentTitle)
-                    ? "Chưa có bài nào đang phát. Bấm `Thêm bài` hoặc dùng `/music play` để bắt đầu."
-                    : $"[{currentTitle}]({currentUrl ?? "https://www.youtube.com"})");
+            .WithColor(GetPanelColor(status))
+            .WithAuthor(BuildPanelHeader(status), guild.IconUrl)
+            .WithDescription(BuildPanelDescription(status, currentTitle, currentUrl));
 
-        embed.AddField("Trạng thái", BuildPlaybackStateLabel(status), true);
+        embed.AddField("🎛️ Trạng thái", BuildPlaybackStateLabel(status), true);
         embed.AddField(
-            "Kênh voice",
+            "🎧 Kênh voice",
             status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "Chưa kết nối",
             true);
 
         if (currentTrack is not null)
         {
-            embed.AddField("Tác giả", currentTrack.Author, true);
-            embed.AddField("Độ dài", FormatDuration(currentTrack.Duration), true);
+            embed.AddField("🎤 Tác giả", currentTrack.Author, true);
+            embed.AddField("⏱️ Thời lượng", FormatDuration(currentTrack.Duration), true);
 
             if (currentTrack.ArtworkUri is not null)
             {
@@ -757,9 +755,9 @@ public sealed class YouTubeMusicService
             }
         }
 
-        embed.AddField("Tiếp theo", upcomingPreview, false);
-        embed.AddField("10 bài gần nhất", recentPreview, false);
-        embed.WithFooter($"Guild: {guild.Name}");
+        embed.AddField("📼 Tiếp theo", upcomingPreview, false);
+        embed.AddField("🕘 10 bài gần nhất", recentPreview, false);
+        embed.WithFooter($"🎚️ {guild.Name} • /music play để thêm bài");
 
         return embed.Build();
     }
@@ -767,18 +765,18 @@ public sealed class YouTubeMusicService
     private static MessageComponent BuildPanelComponents(MusicPlaybackStatus status)
     {
         var builder = new ComponentBuilder()
-            .WithButton("Thêm bài", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, row: 0)
-            .WithButton("Lùi", MusicPanelConstants.PreviousButtonId, ButtonStyle.Secondary, disabled: !status.HasPrevious, row: 0)
+            .WithButton("➕ Thêm bài", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, row: 0)
+            .WithButton("⏮️ Lùi", MusicPanelConstants.PreviousButtonId, ButtonStyle.Secondary, disabled: !status.HasPrevious, row: 0)
             .WithButton(
-                status.IsPaused ? "Tiếp tục" : "Tạm dừng",
+                status.IsPaused ? "▶️ Tiếp tục" : "⏸️ Tạm dừng",
                 MusicPanelConstants.PauseResumeButtonId,
                 ButtonStyle.Primary,
                 disabled: !status.IsPlaying,
                 row: 0)
-            .WithButton("Tiếp", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.HasNext, row: 0)
-            .WithButton("Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
-            .WithButton("Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 1)
-            .WithButton("Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
+            .WithButton("⏭️ Tiếp", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.HasNext, row: 0)
+            .WithButton("⏹️ Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
+            .WithButton("🔌 Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
+            .WithButton("🔄 Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
 
         return builder.Build();
     }
@@ -812,20 +810,20 @@ public sealed class YouTubeMusicService
     {
         if (!status.IsConnected)
         {
-            return "Chưa kết nối";
+            return "💤 Chưa kết nối";
         }
 
         if (status.IsPaused)
         {
-            return "Tạm dừng";
+            return "⏸️ Tạm dừng";
         }
 
         if (status.IsPlaying)
         {
-            return "Đang phát";
+            return "▶️ Đang phát";
         }
 
-        return "Sẵn sàng";
+        return "🎧 Sẵn sàng";
     }
 
     private static string BuildUpcomingPreview(GuildMusicSession session)
@@ -837,7 +835,7 @@ public sealed class YouTubeMusicService
 
         if (upcomingEntries.Length == 0)
         {
-            return "Hàng đợi đang trống.";
+            return "📭 Hàng đợi đang trống.";
         }
 
         var builder = new StringBuilder();
@@ -869,7 +867,7 @@ public sealed class YouTubeMusicService
     {
         if (session.PreviousTracks.Count == 0)
         {
-            return "Chưa có lịch sử gần đây.";
+            return "🕘 Chưa có lịch sử gần đây.";
         }
 
         var recentEntries = session.PreviousTracks.TakeLast(RecentPreviewLimit).Reverse().ToArray();
@@ -888,6 +886,57 @@ public sealed class YouTubeMusicService
         }
 
         return builder.ToString();
+    }
+
+    private static Color GetPanelColor(MusicPlaybackStatus status)
+    {
+        if (status.IsPaused)
+        {
+            return new Color(0xD79B2E);
+        }
+
+        if (status.IsPlaying)
+        {
+            return new Color(0x1E8E6E);
+        }
+
+        if (status.IsConnected)
+        {
+            return new Color(0x3A6EA5);
+        }
+
+        return new Color(0x4F5D75);
+    }
+
+    private static string BuildPanelHeader(MusicPlaybackStatus status)
+    {
+        if (status.IsPaused)
+        {
+            return "⏸️ Deck đang tạm dừng";
+        }
+
+        if (status.IsPlaying)
+        {
+            return "🎶 Deck đang phát";
+        }
+
+        if (status.IsConnected)
+        {
+            return "🎧 Deck đã sẵn sàng";
+        }
+
+        return "💤 Deck đang chờ bài mới";
+    }
+
+    private static string BuildPanelDescription(MusicPlaybackStatus status, string? currentTitle, string? currentUrl)
+    {
+        if (string.IsNullOrWhiteSpace(currentTitle))
+        {
+            return "💤 **Máy nghe nhạc đang chờ bài mới.**\n➕ Bấm `Thêm bài` hoặc dùng `/music play` để bắt đầu.";
+        }
+
+        var stateText = status.IsPaused ? "⏸️ Đang tạm dừng" : status.IsPlaying ? "🎶 Đang phát" : "🎧 Sẵn sàng";
+        return $"{stateText}\n💿 **[{currentTitle}]({currentUrl ?? "https://www.youtube.com"})**";
     }
 
     private static void PushHistory(List<MusicTrackEntry> list, MusicTrackEntry entry)

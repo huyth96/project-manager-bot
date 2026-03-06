@@ -3,8 +3,8 @@ namespace ProjectManagerBot.Services;
 internal static class MusicPanelConstants
 {
     public const string ChannelName = "\U0001F3B5-music-player";
-    public const string ChannelTopic = "Kênh điều khiển nhạc bằng panel cố định của bot.";
-    public const string PanelTitle = "\U0001F3B5 Trình Phát Nhạc";
+    public const string ChannelTopic = "\U0001F39B\U0000FE0F Kênh điều khiển nhạc bằng panel cố định của bot.";
+    public const string PanelTitle = "\U0001F4BF Máy Nghe Nhạc";
 
     public const string AddTrackButtonId = "music:add_track";
     public const string PreviousButtonId = "music:previous";
