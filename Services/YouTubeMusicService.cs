@@ -18,7 +18,7 @@ public sealed class YouTubeMusicService
     private const float DefaultVolume = 100F;
     private const float VolumeStep = 10F;
     private const float MinVolume = 10F;
-    private const float MaxVolume = 150F;
+    private const float MaxVolume = 100F;
     private const int QueuePreviewLimit = 5;
 
     private static readonly Regex YouTubeIdRegex = new("^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled);
@@ -91,12 +91,13 @@ public sealed class YouTubeMusicService
         var videoUrl = primaryTrack.Uri?.ToString() ?? normalizedReference;
 
         _logger.LogInformation(
-            "Queued playback via Lavalink for guild {GuildId}: {TrackTitle} ({VideoUrl}), {AddedCount} track(s), queue position {QueuePosition}.",
+            "Queued playback via Lavalink for guild {GuildId}: {TrackTitle} ({VideoUrl}), {AddedCount} track(s), queue position {QueuePosition}, voice bitrate {VoiceBitrate}.",
             guildId,
             primaryTrack.Title,
             videoUrl,
             addedCount,
-            firstQueuePosition);
+            firstQueuePosition,
+            targetChannel.Bitrate);
 
         return new MusicPlayResult(
             Title: primaryTrack.Title,
