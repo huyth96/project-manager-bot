@@ -13,6 +13,7 @@ public sealed class MusicModule(
     ILogger<MusicModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
+    private const float VolumeStep = 1F;
 
     private readonly YouTubeMusicService _musicService = musicService;
     private readonly ILogger<MusicModule> _logger = logger;
@@ -357,13 +358,13 @@ public sealed class MusicModule(
     [ComponentInteraction(MusicPanelConstants.VolumeDownButtonId, true)]
     public async Task VolumeDownButtonAsync()
     {
-        await ChangeVolumeAsync(-10F);
+        await ChangeVolumeAsync(-VolumeStep);
     }
 
     [ComponentInteraction(MusicPanelConstants.VolumeUpButtonId, true)]
     public async Task VolumeUpButtonAsync()
     {
-        await ChangeVolumeAsync(10F);
+        await ChangeVolumeAsync(VolumeStep);
     }
 
     [ComponentInteraction(MusicPanelConstants.RefreshButtonId, true)]

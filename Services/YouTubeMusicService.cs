@@ -13,8 +13,8 @@ namespace ProjectManagerBot.Services;
 
 public sealed class YouTubeMusicService
 {
-    private const float DefaultVolume = 100F;
-    private const float MinVolume = 10F;
+    private const float DefaultVolume = 1F;
+    private const float MinVolume = 1F;
     private const float MaxVolume = 100F;
     private const int HistoryLimit = 10;
     private const int QueuePreviewLimit = 5;
@@ -651,18 +651,15 @@ public sealed class YouTubeMusicService
         {
             var player = await _audioService.Players.JoinAsync(targetChannel, cancellationToken);
 
-            float? customVolume = null;
+            float targetVolume;
             lock (session.StateGate)
             {
-                if (session.HasCustomVolume)
-                {
-                    customVolume = session.Volume;
-                }
+                targetVolume = session.Volume;
             }
 
-            if (customVolume.HasValue && Math.Abs(player.Volume - customVolume.Value) > 0.1F)
+            if (Math.Abs(player.Volume - targetVolume) > 0.1F)
             {
-                await player.SetVolumeAsync(customVolume.Value, cancellationToken);
+                await player.SetVolumeAsync(targetVolume, cancellationToken);
             }
 
             return player;
