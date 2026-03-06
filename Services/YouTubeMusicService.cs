@@ -15,7 +15,7 @@ namespace ProjectManagerBot.Services;
 
 public sealed class YouTubeMusicService
 {
-    private const float DefaultVolume = 100F;
+    private const float DefaultVolume = 50F;
     private const float VolumeStep = 10F;
     private const float MinVolume = 10F;
     private const float MaxVolume = 100F;
