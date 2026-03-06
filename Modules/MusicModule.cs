@@ -36,9 +36,7 @@ public sealed class MusicModule(
         try
         {
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, video);
-            await SendInteractionMessageAsync(
-                $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
-                ephemeral: true);
+            await SendInteractionMessageAsync(BuildPlayResultMessage(result), ephemeral: true);
         }
         catch (InvalidOperationException ex)
         {
@@ -96,9 +94,69 @@ public sealed class MusicModule(
             $"Trạng thái: `{stateText}`\n" +
             $"Bài hiện tại: `{title}`\n" +
             $"Voice: {voiceChannelText}\n" +
+            $"Hàng đợi: `{status.QueueCount}`\n" +
+            $"Gần đây: `{status.RecentCount}`\n" +
             $"Âm lượng: `{status.Volume:0}%`" +
             panelText,
             ephemeral: true);
+    }
+
+    [SlashCommand("previous", "Phát lại bài trước trong lịch sử 10 bài gần nhất.")]
+    public async Task PreviousAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _musicService.PreviousAsync(Context.Guild.Id);
+            await SendInteractionMessageAsync(
+                result is null
+                    ? "Không còn bài trước trong lịch sử gần đây."
+                    : $"Đã quay lại `{result.Title}`.",
+                ephemeral: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
+    }
+
+    [SlashCommand("next", "Chuyển sang bài kế tiếp trong history hoặc hàng đợi.")]
+    public async Task NextAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _musicService.NextAsync(Context.Guild.Id);
+            await SendInteractionMessageAsync(
+                result is null
+                    ? "Không có bài tiếp theo trong lịch sử hoặc hàng đợi."
+                    : $"Đã chuyển sang `{result.Title}`.",
+                ephemeral: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
     }
 
     [SlashCommand("stop", "Dừng bài đang phát nhưng vẫn ở lại voice channel.")]
@@ -170,8 +228,35 @@ public sealed class MusicModule(
         try
         {
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, modal.VideoReference);
+            await SendInteractionMessageAsync(BuildPlayResultMessage(result), ephemeral: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
+    }
+
+    [ComponentInteraction(MusicPanelConstants.PreviousButtonId, true)]
+    public async Task PreviousButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _musicService.PreviousAsync(Context.Guild.Id);
             await SendInteractionMessageAsync(
-                $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
+                result is null
+                    ? "Không còn bài trước trong lịch sử gần đây."
+                    : $"Đã quay lại `{result.Title}`.",
                 ephemeral: true);
         }
         catch (InvalidOperationException ex)
@@ -214,10 +299,19 @@ public sealed class MusicModule(
             return;
         }
 
-        var skipped = await _musicService.SkipAsync(Context.Guild.Id);
-        await SendInteractionMessageAsync(
-            skipped ? "Đã bỏ qua bài hiện tại." : "Không có bài nào để bỏ qua.",
-            ephemeral: true);
+        try
+        {
+            var result = await _musicService.NextAsync(Context.Guild.Id);
+            await SendInteractionMessageAsync(
+                result is null
+                    ? "Không có bài tiếp theo trong lịch sử hoặc hàng đợi."
+                    : $"Đã chuyển sang `{result.Title}`.",
+                ephemeral: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
     }
 
     [ComponentInteraction(MusicPanelConstants.StopButtonId, true)]
@@ -236,7 +330,7 @@ public sealed class MusicModule(
 
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            stopped ? "Đã dừng phát nhạc." : "Hiện không có bài nào đang phát.",
+            stopped ? "Đã dừng phát nhạc và xóa hàng đợi." : "Hiện không có bài nào đang phát.",
             ephemeral: true);
     }
 
@@ -301,6 +395,16 @@ public sealed class MusicModule(
         await SendInteractionMessageAsync(
             volume.HasValue ? $"Đã cập nhật âm lượng: `{volume.Value:0}%`." : "Không có player đang hoạt động.",
             ephemeral: true);
+    }
+
+    private static string BuildPlayResultMessage(MusicPlayResult result)
+    {
+        if (result.AddedToQueue)
+        {
+            return $"Đã thêm `{result.Title}` vào hàng đợi ở vị trí `{result.QueuePosition}`.";
+        }
+
+        return $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}";
     }
 
     private async Task<IVoiceChannel?> ValidateControllerVoiceChannelAsync(bool requireVoiceChannel)

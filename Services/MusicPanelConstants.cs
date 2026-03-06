@@ -7,6 +7,7 @@ internal static class MusicPanelConstants
     public const string PanelTitle = "\U0001F3B5 Trình Phát Nhạc";
 
     public const string AddTrackButtonId = "music:add_track";
+    public const string PreviousButtonId = "music:previous";
     public const string PauseResumeButtonId = "music:pause_resume";
     public const string SkipButtonId = "music:skip";
     public const string StopButtonId = "music:stop";
