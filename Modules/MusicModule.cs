@@ -6,7 +6,7 @@ using ProjectManagerBot.Services;
 
 namespace ProjectManagerBot.Modules;
 
-[Group("music", "Phat nhac YouTube trong voice channel.")]
+[Group("music", "Phát nhạc YouTube trong voice channel.")]
 [RequireContext(ContextType.Guild)]
 public sealed class MusicModule(
     YouTubeMusicService musicService,
@@ -17,9 +17,9 @@ public sealed class MusicModule(
     private readonly YouTubeMusicService _musicService = musicService;
     private readonly ILogger<MusicModule> _logger = logger;
 
-    [SlashCommand("play", "Phat nhac YouTube trong voice channel ban dang tham gia.")]
+    [SlashCommand("play", "Phát nhạc YouTube trong voice channel bạn đang tham gia.")]
     public async Task PlayAsync(
-        [Summary("video", "URL hoac video ID YouTube")]
+        [Summary("video", "URL hoặc video ID YouTube")]
         string video)
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -44,7 +44,7 @@ public sealed class MusicModule(
         }
     }
 
-    [SlashCommand("panel", "Tao hoac lam moi panel dieu khien music.")]
+    [SlashCommand("panel", "Tạo hoặc làm mới panel điều khiển music.")]
     public async Task PanelAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -57,16 +57,16 @@ public sealed class MusicModule(
 
         if (panel is null)
         {
-            await SendInteractionMessageAsync("Khong the tao panel music trong kenh hien tai.", ephemeral: true);
+            await SendInteractionMessageAsync("Không thể tạo panel music trong kênh hiện tại.", ephemeral: true);
             return;
         }
 
         await SendInteractionMessageAsync(
-            $"Da dong bo panel music tai <#{panel.ChannelId}>.",
+            $"Đã đồng bộ panel music tại <#{panel.ChannelId}>.",
             ephemeral: true);
     }
 
-    [SlashCommand("now", "Xem trang thai phat nhac hien tai cua bot.")]
+    [SlashCommand("now", "Xem trạng thái phát nhạc hiện tại của bot.")]
     public async Task NowAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -77,30 +77,30 @@ public sealed class MusicModule(
         var status = _musicService.GetStatus(Context.Guild.Id);
         if (!status.IsConnected)
         {
-            await SendInteractionMessageAsync("Bot chua ket noi voice channel nao.", ephemeral: true);
+            await SendInteractionMessageAsync("Bot chưa kết nối voice channel nào.", ephemeral: true);
             return;
         }
 
         var voiceChannelText = status.VoiceChannelId.HasValue
             ? $"<#{status.VoiceChannelId.Value}>"
-            : "voice channel hien tai";
+            : "voice channel hiện tại";
         var panelText = status.PanelChannelId.HasValue
             ? $"\nPanel: <#{status.PanelChannelId.Value}>"
             : string.Empty;
-        var title = status.CurrentTitle ?? "Khong co bai dang phat";
-        var stateText = status.IsPaused ? "Tam dung" : status.IsPlaying ? "Dang phat" : "San sang";
+        var title = status.CurrentTitle ?? "Không có bài đang phát";
+        var stateText = status.IsPaused ? "Tạm dừng" : status.IsPlaying ? "Đang phát" : "Sẵn sàng";
 
         await SendInteractionMessageAsync(
-            $"Trang thai: `{stateText}`\n" +
-            $"Bai hien tai: `{title}`\n" +
+            $"Trạng thái: `{stateText}`\n" +
+            $"Bài hiện tại: `{title}`\n" +
             $"Voice: {voiceChannelText}\n" +
-            $"Hang doi: `{status.QueueCount}`\n" +
-            $"Am luong: `{status.Volume:0}%`" +
+            $"Hàng đợi: `{status.QueueCount}`\n" +
+            $"Âm lượng: `{status.Volume:0}%`" +
             panelText,
             ephemeral: true);
     }
 
-    [SlashCommand("stop", "Dung bai dang phat nhung van o lai voice channel.")]
+    [SlashCommand("stop", "Dừng bài đang phát nhưng vẫn ở lại voice channel.")]
     public async Task StopAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -116,11 +116,11 @@ public sealed class MusicModule(
 
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            stopped ? "Da dung phat nhac va xoa hang doi." : "Hien khong co bai nao dang phat.",
+            stopped ? "Đã dừng phát nhạc và xóa hàng đợi." : "Hiện không có bài nào đang phát.",
             ephemeral: true);
     }
 
-    [SlashCommand("leave", "Dung nhac va roi khoi voice channel.")]
+    [SlashCommand("leave", "Dừng nhạc và rời khỏi voice channel.")]
     public async Task LeaveAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -136,7 +136,7 @@ public sealed class MusicModule(
 
         var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            disconnected ? "Da dung nhac va roi voice channel." : "Bot chua o voice channel nao.",
+            disconnected ? "Đã dừng nhạc và rời voice channel." : "Bot chưa ở voice channel nào.",
             ephemeral: true);
     }
 
@@ -193,7 +193,7 @@ public sealed class MusicModule(
 
         var changed = await _musicService.PauseOrResumeAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            changed ? "Da cap nhat trang thai phat nhac." : "Khong co player dang hoat dong.",
+            changed ? "Đã cập nhật trạng thái phát nhạc." : "Không có player đang hoạt động.",
             ephemeral: true);
     }
 
@@ -213,7 +213,7 @@ public sealed class MusicModule(
 
         var skipped = await _musicService.SkipAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            skipped ? "Da skip bai hien tai." : "Khong co bai nao de skip.",
+            skipped ? "Đã chuyển sang bài tiếp theo." : "Không có bài nào để bỏ qua.",
             ephemeral: true);
     }
 
@@ -233,7 +233,7 @@ public sealed class MusicModule(
 
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            stopped ? "Da dung phat nhac va xoa hang doi." : "Hien khong co bai nao dang phat.",
+            stopped ? "Đã dừng phát nhạc và xóa hàng đợi." : "Hiện không có bài nào đang phát.",
             ephemeral: true);
     }
 
@@ -253,7 +253,7 @@ public sealed class MusicModule(
 
         var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
         await SendInteractionMessageAsync(
-            disconnected ? "Da roi voice channel." : "Bot chua ket noi voice channel nao.",
+            disconnected ? "Đã rời voice channel." : "Bot chưa kết nối voice channel nào.",
             ephemeral: true);
     }
 
@@ -278,7 +278,7 @@ public sealed class MusicModule(
         }
 
         await _musicService.RefreshPanelAsync(Context.Guild.Id);
-        await SendInteractionMessageAsync("Da lam moi panel music.", ephemeral: true);
+        await SendInteractionMessageAsync("Đã làm mới panel music.", ephemeral: true);
     }
 
     private async Task ChangeVolumeAsync(float delta)
@@ -296,7 +296,7 @@ public sealed class MusicModule(
 
         var volume = await _musicService.AdjustVolumeAsync(Context.Guild.Id, delta);
         await SendInteractionMessageAsync(
-            volume.HasValue ? $"Da cap nhat am luong: `{volume.Value:0}%`." : "Khong co player dang hoat dong.",
+            volume.HasValue ? $"Đã cập nhật âm lượng: `{volume.Value:0}%`." : "Không có player đang hoạt động.",
             ephemeral: true);
     }
 
@@ -304,14 +304,14 @@ public sealed class MusicModule(
     {
         if (Context.User is not SocketGuildUser guildUser)
         {
-            await SendInteractionMessageAsync("Khong xac dinh duoc thanh vien guild hien tai.", ephemeral: true);
+            await SendInteractionMessageAsync("Không xác định được thành viên guild hiện tại.", ephemeral: true);
             return null;
         }
 
         var userVoiceChannel = guildUser.VoiceChannel;
         if (requireVoiceChannel && userVoiceChannel is null)
         {
-            await SendInteractionMessageAsync("Ban can vao voice channel truoc khi dieu khien music.", ephemeral: true);
+            await SendInteractionMessageAsync("Bạn cần vào voice channel trước khi điều khiển music.", ephemeral: true);
             return null;
         }
 
@@ -319,7 +319,7 @@ public sealed class MusicModule(
         if (status.VoiceChannelId.HasValue && userVoiceChannel?.Id != status.VoiceChannelId.Value)
         {
             await SendInteractionMessageAsync(
-                $"Ban can vao cung voice channel voi bot (<#{status.VoiceChannelId.Value}>) de dieu khien nhac.",
+                $"Bạn cần vào cùng voice channel với bot (<#{status.VoiceChannelId.Value}>) để điều khiển nhạc.",
                 ephemeral: true);
             return null;
         }
@@ -331,15 +331,15 @@ public sealed class MusicModule(
     {
         if (result.AddedCount > 1)
         {
-            return $"Da them `{result.AddedCount}` bai vao hang doi. Bai dau: `{result.Title}`.";
+            return $"Đã thêm `{result.AddedCount}` bài vào hàng đợi. Bài đầu: `{result.Title}`.";
         }
 
         if (result.StartedImmediately)
         {
-            return $"Dang phat `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}";
+            return $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}";
         }
 
-        return $"Da them `{result.Title}` vao hang doi (vi tri `{result.QueuePosition}`).";
+        return $"Đã thêm `{result.Title}` vào hàng đợi (vị trí `{result.QueuePosition}`).";
     }
 
     private async Task<bool> TryAcknowledgeAsync(bool ephemeral)
@@ -444,13 +444,13 @@ public sealed class MusicModule(
 
 public sealed class MusicAddTrackModal : IModal
 {
-    public string Title => "Them Bai Nhac";
+    public string Title => "Thêm Bài Nhạc";
 
-    [InputLabel("URL hoac video ID")]
+    [InputLabel("URL hoặc video ID")]
     [ModalTextInput(
         "music_video_reference",
         TextInputStyle.Short,
-        placeholder: "https://www.youtube.com/watch?v=... hoac video ID",
+        placeholder: "https://www.youtube.com/watch?v=... hoặc video ID",
         maxLength: 500)]
     public string VideoReference { get; set; } = string.Empty;
 }

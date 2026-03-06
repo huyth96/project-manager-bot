@@ -52,7 +52,7 @@ public sealed class YouTubeMusicService
     {
         if (string.IsNullOrWhiteSpace(videoReference))
         {
-            throw new InvalidOperationException("Hay nhap URL hoac video ID YouTube hop le.");
+            throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
         }
 
         var normalizedReference = NormalizeVideoReference(videoReference);
@@ -61,7 +61,7 @@ public sealed class YouTubeMusicService
 
         if (tracks.Length == 0)
         {
-            throw new InvalidOperationException("Khong tim thay bai nao hop le de phat.");
+            throw new InvalidOperationException("Không tìm thấy bài nào hợp lệ để phát.");
         }
 
         var player = await JoinPlayerAsync(guildId, targetChannel, cancellationToken);
@@ -290,7 +290,7 @@ public sealed class YouTubeMusicService
             args.Track.Title,
             args.Exception.Message);
 
-        await NotifyPanelChannelAsync(args.Player.GuildId, $"Khong the phat `{args.Track.Title}`. Bot se bo qua bai nay neu co hang doi tiep theo.");
+        await NotifyPanelChannelAsync(args.Player.GuildId, $"Không thể phát `{args.Track.Title}`. Bot sẽ bỏ qua bài này nếu có hàng đợi tiếp theo.");
         await RefreshPanelAsync(args.Player.GuildId);
     }
 
@@ -337,7 +337,7 @@ public sealed class YouTubeMusicService
                 guildId,
                 targetChannel.Id);
 
-            throw new InvalidOperationException("Khong the ket noi voice/Lavalink. Hay kiem tra node Lavalink va thu lai.");
+            throw new InvalidOperationException("Không thể kết nối voice/Lavalink. Hãy kiểm tra node Lavalink và thử lại.");
         }
     }
 
@@ -351,7 +351,7 @@ public sealed class YouTubeMusicService
                 cancellationToken: cancellationToken);
             if (!loadResult.HasMatches)
             {
-                throw new InvalidOperationException("Khong tim thay bai nao hop le de phat.");
+                throw new InvalidOperationException("Không tìm thấy bài nào hợp lệ để phát.");
             }
 
             return loadResult;
@@ -371,7 +371,7 @@ public sealed class YouTubeMusicService
                 "Lavalink track load failed for reference {Reference}.",
                 ToSafeReference(normalizedReference));
 
-            throw new InvalidOperationException("Khong the phan giai bai YouTube qua Lavalink. Hay thu URL/video khac.");
+            throw new InvalidOperationException("Không thể phân giải bài YouTube qua Lavalink. Hãy thử URL/video khác.");
         }
     }
 
@@ -431,23 +431,23 @@ public sealed class YouTubeMusicService
             .WithColor(status.IsPlaying ? Color.Green : status.IsConnected ? Color.Orange : Color.DarkGrey)
             .WithDescription(
                 currentTrack is null
-                    ? "Chua co bai nao dang phat. Bam `Them bai` hoac dung `/music play` de bat dau."
+                    ? "Chưa có bài nào đang phát. Bấm `Thêm bài` hoặc dùng `/music play` để bắt đầu."
                     : $"[{currentTrack.Title}]({BuildTrackUrl(currentTrack)})");
 
-        embed.AddField("Trang thai", BuildPlaybackStateLabel(status), true);
+        embed.AddField("Trạng thái", BuildPlaybackStateLabel(status), true);
         embed.AddField(
-            "Kenh voice",
-            status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "Chua ket noi",
+            "Kênh voice",
+            status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "Chưa kết nối",
             true);
-        embed.AddField("Am luong", $"{status.Volume:0}%", true);
+        embed.AddField("Âm lượng", $"{status.Volume:0}%", true);
 
         if (currentTrack is not null)
         {
-            embed.AddField("Tac gia", currentTrack.Author, true);
-            embed.AddField("Do dai", FormatDuration(currentTrack.Duration), true);
+            embed.AddField("Tác giả", currentTrack.Author, true);
+            embed.AddField("Độ dài", FormatDuration(currentTrack.Duration), true);
             embed.AddField(
-                "Nguoi yeu cau",
-                requestedTrack is null ? "Khong ro" : $"<@{requestedTrack.RequesterUserId}>",
+                "Người yêu cầu",
+                requestedTrack is null ? "Không rõ" : $"<@{requestedTrack.RequesterUserId}>",
                 true);
 
             if (currentTrack.ArtworkUri is not null)
@@ -456,7 +456,7 @@ public sealed class YouTubeMusicService
             }
         }
 
-        embed.AddField("Hang doi", BuildQueuePreview(player), false);
+        embed.AddField("Hàng đợi", BuildQueuePreview(player), false);
         embed.WithFooter($"Guild: {guild.Name}");
 
         return embed.Build();
@@ -465,19 +465,19 @@ public sealed class YouTubeMusicService
     private static MessageComponent BuildPanelComponents(MusicPlaybackStatus status)
     {
         var builder = new ComponentBuilder()
-            .WithButton("Them bai", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, row: 0)
+            .WithButton("Thêm bài", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, row: 0)
             .WithButton(
-                status.IsPaused ? "Resume" : "Pause",
+                status.IsPaused ? "Tiếp tục" : "Tạm dừng",
                 MusicPanelConstants.PauseResumeButtonId,
                 ButtonStyle.Primary,
                 disabled: !status.IsPlaying,
                 row: 0)
-            .WithButton("Skip", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.IsPlaying, row: 0)
-            .WithButton("Stop", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
-            .WithButton("Leave", MusicPanelConstants.LeaveButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
-            .WithButton("Vol -", MusicPanelConstants.VolumeDownButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
-            .WithButton("Vol +", MusicPanelConstants.VolumeUpButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
-            .WithButton("Refresh", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
+            .WithButton("Bỏ qua", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.IsPlaying, row: 0)
+            .WithButton("Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
+            .WithButton("Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
+            .WithButton("Âm lượng -", MusicPanelConstants.VolumeDownButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
+            .WithButton("Âm lượng +", MusicPanelConstants.VolumeUpButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
+            .WithButton("Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
 
         return builder.Build();
     }
@@ -511,27 +511,27 @@ public sealed class YouTubeMusicService
     {
         if (!status.IsConnected)
         {
-            return "Chua ket noi";
+            return "Chưa kết nối";
         }
 
         if (status.IsPaused)
         {
-            return "Tam dung";
+            return "Tạm dừng";
         }
 
         if (status.IsPlaying)
         {
-            return "Dang phat";
+            return "Đang phát";
         }
 
-        return "San sang";
+        return "Sẵn sàng";
     }
 
     private static string BuildQueuePreview(QueuedLavalinkPlayer? player)
     {
         if (player is null || player.Queue.Count == 0)
         {
-            return "Hang doi dang trong.";
+            return "Hàng đợi đang trống.";
         }
 
         var builder = new StringBuilder();
@@ -561,9 +561,9 @@ public sealed class YouTubeMusicService
         if (player.Queue.Count > previewItems.Length)
         {
             builder.Append('\n')
-                .Append("... va ")
+                .Append("... và ")
                 .Append(player.Queue.Count - previewItems.Length)
-                .Append(" bai nua");
+                .Append(" bài nữa");
         }
 
         return builder.ToString();
@@ -641,7 +641,7 @@ public sealed class YouTubeMusicService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Lavalink is not ready.");
-            throw new InvalidOperationException("Lavalink chua san sang. Hay kiem tra node Lavalink truoc khi phat nhac.");
+            throw new InvalidOperationException("Lavalink chưa sẵn sàng. Hãy kiểm tra node Lavalink trước khi phát nhạc.");
         }
     }
 
@@ -672,7 +672,7 @@ public sealed class YouTubeMusicService
         var trimmed = videoReference.Trim();
         if (trimmed.Length == 0)
         {
-            throw new InvalidOperationException("Hay nhap URL hoac video ID YouTube hop le.");
+            throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
         }
 
         if (TryExtractYouTubeVideoId(trimmed, out var videoId))
@@ -690,7 +690,7 @@ public sealed class YouTubeMusicService
             }
         }
 
-        throw new InvalidOperationException("Hay nhap URL hoac video ID YouTube hop le.");
+        throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
     }
 
     private static string TrimTrailingUrlPunctuation(string value)
