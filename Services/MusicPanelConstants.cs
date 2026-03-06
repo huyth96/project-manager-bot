@@ -17,8 +17,8 @@ internal static class MusicPanelConstants
     public const string MusicEmojiUrl = "https://cdn.discordapp.com/emojis/1479389927375372420.gif?size=96&quality=lossless";
 
     public const string ChannelName = "\U0001F3B5-music-player";
-    public const string ChannelTopic = EqualizerEmoji + " Kênh điều khiển nhạc bằng panel cố định của bot.";
-    public const string PanelTitle = EqualizerEmoji + " Máy Nghe Nhạc";
+    public const string ChannelTopic = "Kênh điều khiển nhạc bằng panel cố định của bot.";
+    public const string PanelTitle = "Máy Nghe Nhạc";
 
     public const string AddTrackButtonId = "music:add_track";
     public const string PreviousButtonId = "music:previous";
