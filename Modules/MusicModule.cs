@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.Interactions;
 using Discord.Net;
 using Discord.WebSocket;
@@ -6,19 +6,20 @@ using ProjectManagerBot.Services;
 
 namespace ProjectManagerBot.Modules;
 
-[Group("music", "Phat nhac YouTube trong voice channel.")]
+[Group("music", "Phát nhạc YouTube trong voice channel.")]
 [RequireContext(ContextType.Guild)]
 public sealed class MusicModule(
     YouTubeMusicService musicService,
     ILogger<MusicModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
+
     private readonly YouTubeMusicService _musicService = musicService;
     private readonly ILogger<MusicModule> _logger = logger;
 
-    [SlashCommand("play", "Phat nhac YouTube trong voice channel ban dang tham gia.")]
+    [SlashCommand("play", "Phát nhạc YouTube trong voice channel bạn đang tham gia.")]
     public async Task PlayAsync(
-        [Summary("video", "URL hoac video ID YouTube")]
+        [Summary("video", "URL hoặc video ID YouTube")]
         string video)
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -26,26 +27,48 @@ public sealed class MusicModule(
             return;
         }
 
-        if (Context.User is not SocketGuildUser guildUser || guildUser.VoiceChannel is not IVoiceChannel voiceChannel)
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
         {
-            await SendFollowupAsync("Ban can vao voice channel truoc khi dung `/music play`.", ephemeral: true);
             return;
         }
 
         try
         {
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, video);
-            await SendFollowupAsync(
-                $"Dang phat `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
+            await SendInteractionMessageAsync(
+                $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
                 ephemeral: true);
         }
         catch (InvalidOperationException ex)
         {
-            await SendFollowupAsync(ex.Message, ephemeral: true);
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
         }
     }
 
-    [SlashCommand("now", "Xem trang thai phat nhac hien tai cua bot.")]
+    [SlashCommand("panel", "Tạo hoặc làm mới panel điều khiển music.")]
+    public async Task PanelAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var preferredChannel = Context.Channel as ITextChannel;
+        var panel = await _musicService.EnsurePanelAsync(Context.Guild, preferredChannel);
+
+        if (panel is null)
+        {
+            await SendInteractionMessageAsync("Không thể tạo panel music trong kênh hiện tại.", ephemeral: true);
+            return;
+        }
+
+        await SendInteractionMessageAsync(
+            $"Đã đồng bộ panel music tại <#{panel.ChannelId}>.",
+            ephemeral: true);
+    }
+
+    [SlashCommand("now", "Xem trạng thái phát nhạc hiện tại của bot.")]
     public async Task NowAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -56,23 +79,29 @@ public sealed class MusicModule(
         var status = _musicService.GetStatus(Context.Guild.Id);
         if (!status.IsConnected)
         {
-            await SendFollowupAsync("Bot chua ket noi voice channel nao.", ephemeral: true);
+            await SendInteractionMessageAsync("Bot chưa kết nối voice channel nào.", ephemeral: true);
             return;
         }
 
-        if (!status.IsPlaying)
-        {
-            var channelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
-            await SendFollowupAsync($"Bot dang o {channelText} nhung chua phat bai nao.", ephemeral: true);
-            return;
-        }
+        var voiceChannelText = status.VoiceChannelId.HasValue
+            ? $"<#{status.VoiceChannelId.Value}>"
+            : "voice channel hiện tại";
+        var panelText = status.PanelChannelId.HasValue
+            ? $"\nPanel: <#{status.PanelChannelId.Value}>"
+            : string.Empty;
+        var title = status.CurrentTitle ?? "Không có bài đang phát";
+        var stateText = status.IsPaused ? "Tạm dừng" : status.IsPlaying ? "Đang phát" : "Sẵn sàng";
 
-        var title = status.CurrentTitle ?? "Khong ro tieu de";
-        var voiceChannelText = status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "voice channel hien tai";
-        await SendFollowupAsync($"Dang phat `{title}` trong {voiceChannelText}.", ephemeral: true);
+        await SendInteractionMessageAsync(
+            $"Trạng thái: `{stateText}`\n" +
+            $"Bài hiện tại: `{title}`\n" +
+            $"Voice: {voiceChannelText}\n" +
+            $"Âm lượng: `{status.Volume:0}%`" +
+            panelText,
+            ephemeral: true);
     }
 
-    [SlashCommand("stop", "Dung bai dang phat nhung van o lai voice channel.")]
+    [SlashCommand("stop", "Dừng bài đang phát nhưng vẫn ở lại voice channel.")]
     public async Task StopAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -80,13 +109,19 @@ public sealed class MusicModule(
             return;
         }
 
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
         var stopped = await _musicService.StopAsync(Context.Guild.Id);
-        await SendFollowupAsync(
-            stopped ? "Da dung phat nhac." : "Hien khong co bai nao dang phat.",
+        await SendInteractionMessageAsync(
+            stopped ? "Đã dừng phát nhạc." : "Hiện không có bài nào đang phát.",
             ephemeral: true);
     }
 
-    [SlashCommand("leave", "Dung nhac va roi khoi voice channel.")]
+    [SlashCommand("leave", "Dừng nhạc và rời khỏi voice channel.")]
     public async Task LeaveAsync()
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -94,10 +129,205 @@ public sealed class MusicModule(
             return;
         }
 
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
         var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
-        await SendFollowupAsync(
-            disconnected ? "Da dung nhac va roi voice channel." : "Bot chua o voice channel nao.",
+        await SendInteractionMessageAsync(
+            disconnected ? "Đã dừng nhạc và rời voice channel." : "Bot chưa ở voice channel nào.",
             ephemeral: true);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.AddTrackButtonId, true)]
+    public async Task AddTrackButtonAsync()
+    {
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        await RespondWithModalAsync<MusicAddTrackModal>(MusicPanelConstants.AddTrackModalId);
+    }
+
+    [ModalInteraction(MusicPanelConstants.AddTrackModalId, true)]
+    public async Task AddTrackModalAsync(MusicAddTrackModal modal)
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, modal.VideoReference);
+            await SendInteractionMessageAsync(
+                $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}",
+                ephemeral: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
+    }
+
+    [ComponentInteraction(MusicPanelConstants.PauseResumeButtonId, true)]
+    public async Task PauseResumeButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        var changed = await _musicService.PauseOrResumeAsync(Context.Guild.Id);
+        await SendInteractionMessageAsync(
+            changed ? "Đã cập nhật trạng thái phát nhạc." : "Không có player đang hoạt động.",
+            ephemeral: true);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.SkipButtonId, true)]
+    public async Task SkipButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        var skipped = await _musicService.SkipAsync(Context.Guild.Id);
+        await SendInteractionMessageAsync(
+            skipped ? "Đã bỏ qua bài hiện tại." : "Không có bài nào để bỏ qua.",
+            ephemeral: true);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.StopButtonId, true)]
+    public async Task StopButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        var stopped = await _musicService.StopAsync(Context.Guild.Id);
+        await SendInteractionMessageAsync(
+            stopped ? "Đã dừng phát nhạc." : "Hiện không có bài nào đang phát.",
+            ephemeral: true);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.LeaveButtonId, true)]
+    public async Task LeaveButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        var disconnected = await _musicService.LeaveAsync(Context.Guild.Id);
+        await SendInteractionMessageAsync(
+            disconnected ? "Đã rời voice channel." : "Bot chưa kết nối voice channel nào.",
+            ephemeral: true);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.VolumeDownButtonId, true)]
+    public async Task VolumeDownButtonAsync()
+    {
+        await ChangeVolumeAsync(-10F);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.VolumeUpButtonId, true)]
+    public async Task VolumeUpButtonAsync()
+    {
+        await ChangeVolumeAsync(10F);
+    }
+
+    [ComponentInteraction(MusicPanelConstants.RefreshButtonId, true)]
+    public async Task RefreshButtonAsync()
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        await _musicService.RefreshPanelAsync(Context.Guild.Id);
+        await SendInteractionMessageAsync("Đã làm mới panel music.", ephemeral: true);
+    }
+
+    private async Task ChangeVolumeAsync(float delta)
+    {
+        if (!await TryAcknowledgeAsync(ephemeral: true))
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        var volume = await _musicService.AdjustVolumeAsync(Context.Guild.Id, delta);
+        await SendInteractionMessageAsync(
+            volume.HasValue ? $"Đã cập nhật âm lượng: `{volume.Value:0}%`." : "Không có player đang hoạt động.",
+            ephemeral: true);
+    }
+
+    private async Task<IVoiceChannel?> ValidateControllerVoiceChannelAsync(bool requireVoiceChannel)
+    {
+        if (Context.User is not SocketGuildUser guildUser)
+        {
+            await SendInteractionMessageAsync("Không xác định được thành viên guild hiện tại.", ephemeral: true);
+            return null;
+        }
+
+        var userVoiceChannel = guildUser.VoiceChannel;
+        if (requireVoiceChannel && userVoiceChannel is null)
+        {
+            await SendInteractionMessageAsync("Bạn cần vào voice channel trước khi điều khiển music.", ephemeral: true);
+            return null;
+        }
+
+        var status = _musicService.GetStatus(Context.Guild.Id);
+        if (status.VoiceChannelId.HasValue && userVoiceChannel?.Id != status.VoiceChannelId.Value)
+        {
+            await SendInteractionMessageAsync(
+                $"Bạn cần vào cùng voice channel với bot (<#{status.VoiceChannelId.Value}>) để điều khiển nhạc.",
+                ephemeral: true);
+            return null;
+        }
+
+        return userVoiceChannel;
     }
 
     private async Task<bool> TryAcknowledgeAsync(bool ephemeral)
@@ -198,4 +428,17 @@ public sealed class MusicModule(
         {
         }
     }
+}
+
+public sealed class MusicAddTrackModal : IModal
+{
+    public string Title => "Thêm Bài Nhạc";
+
+    [InputLabel("URL hoặc video ID")]
+    [ModalTextInput(
+        "music_video_reference",
+        TextInputStyle.Short,
+        placeholder: "https://www.youtube.com/watch?v=... hoặc video ID",
+        maxLength: 500)]
+    public string VideoReference { get; set; } = string.Empty;
 }

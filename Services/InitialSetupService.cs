@@ -3,7 +3,9 @@ using Discord.WebSocket;
 
 namespace ProjectManagerBot.Services;
 
-public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
+public sealed class InitialSetupService(
+    ILogger<InitialSetupService> logger,
+    YouTubeMusicService musicService)
 {
     private const string MainHallCategory = "\U0001F4E2 S\u1EA2NH CH\u00CDNH";
     private const string ProjectCategory = "\u2694\uFE0F Project A: Đồ Án Tốt Nghiệp";
@@ -28,6 +30,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
     };
 
     private readonly ILogger<InitialSetupService> _logger = logger;
+    private readonly YouTubeMusicService _musicService = musicService;
 
     public Task<StudioSetupResult> InitializeStudioAsync(SocketGuild guild, CancellationToken cancellationToken = default)
     {
@@ -86,6 +89,11 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             mainHall.Id,
             ShopChannelName,
             "Mua role bằng XP bằng nút bấm hoặc slash command /shop.");
+        var musicPlayer = await EnsureTextChannelAsync(
+            guild,
+            mainHall.Id,
+            MusicPanelConstants.ChannelName,
+            MusicPanelConstants.ChannelTopic);
 
         var p1Dashboard = await EnsureTextChannelAsync(
             guild,
@@ -157,6 +165,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 onboarding,
                 roleSelection,
                 roleShop,
+                musicPlayer,
                 p1Dashboard,
                 githubCommits,
                 globalTaskFeed
@@ -179,6 +188,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             ]);
         await ConfigureRoleSelectionPermissionsAsync(guild, roleSelection);
         await ConfigureShopChannelPermissionsAsync(guild, roleShop);
+        await ConfigureMusicPanelPermissionsAsync(guild, musicPlayer, leadRole);
         await ConfigureOpenVoiceChannelPermissionsAsync(guild, openLobby);
         await ConfigureGuestAccessAsync(
             guild,
@@ -191,7 +201,8 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 resourcesWiki,
                 onboarding,
                 roleSelection,
-                roleShop
+                roleShop,
+                musicPlayer
             ],
             restrictedTextChannels:
             [
@@ -221,6 +232,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             roleShop);
         await EnsureWikiMessageAsync(guild, resourcesWiki, onboarding, p1Dashboard);
         await EnsureShopMessageAsync(guild, roleShop);
+        await _musicService.EnsurePanelAsync(guild, musicPlayer, cancellationToken);
         await EnsureChannelGuideMessageAsync(
             guild,
             onboarding,
@@ -228,6 +240,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             onboarding,
             roleSelection,
             roleShop,
+            musicPlayer,
             p1Dashboard,
             p1Backlog,
             p1General,
@@ -248,6 +261,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             CommandLogsChannelId = commandLogs.Id,
             GlobalTaskFeedChannelId = globalTaskFeed.Id,
             ShopChannelId = roleShop.Id,
+            MusicChannelId = musicPlayer.Id,
             DeletedChannelsCount = deletedChannelsCount
         };
     }
@@ -474,6 +488,30 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
             new OverwritePermissions(
                 viewChannel: PermValue.Allow,
                 sendMessages: PermValue.Allow,
+                readMessageHistory: PermValue.Allow));
+    }
+
+    private static async Task ConfigureMusicPanelPermissionsAsync(SocketGuild guild, ITextChannel musicChannel, IRole leadRole)
+    {
+        await musicChannel.AddPermissionOverwriteAsync(
+            guild.EveryoneRole,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                sendMessages: PermValue.Allow,
+                readMessageHistory: PermValue.Allow));
+
+        await musicChannel.AddPermissionOverwriteAsync(
+            leadRole,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                manageMessages: PermValue.Allow));
+
+        await musicChannel.AddPermissionOverwriteAsync(
+            guild.CurrentUser,
+            new OverwritePermissions(
+                viewChannel: PermValue.Allow,
+                sendMessages: PermValue.Allow,
+                manageMessages: PermValue.Allow,
                 readMessageHistory: PermValue.Allow));
     }
 
@@ -804,6 +842,7 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
         ITextChannel onboardingChannel,
         ITextChannel roleSelectionChannel,
         ITextChannel shopChannel,
+        ITextChannel musicChannel,
         ITextChannel dashboardChannel,
         ITextChannel backlogChannel,
         ITextChannel projectGeneralChannel,
@@ -844,7 +883,8 @@ public sealed class InitialSetupService(ILogger<InitialSetupService> logger)
                 $"- <#{onboardingChannel.Id}>: Hướng dẫn thành viên mới\n" +
                 $"- <#{wikiChannel.Id}>: Tài liệu dự án\n" +
                 $"- <#{roleSelectionChannel.Id}>: Nhận role bằng reaction\n" +
-                $"- <#{shopChannel.Id}>: Mua role bằng XP",
+                $"- <#{shopChannel.Id}>: Mua role bằng XP\n" +
+                $"- <#{musicChannel.Id}>: Panel điều khiển phát nhạc",
                 false)
             .AddField(
                 "Project A",
@@ -926,5 +966,6 @@ public sealed class StudioSetupResult
     public ulong CommandLogsChannelId { get; set; }
     public ulong GlobalTaskFeedChannelId { get; set; }
     public ulong ShopChannelId { get; set; }
+    public ulong MusicChannelId { get; set; }
     public int DeletedChannelsCount { get; set; }
 }
