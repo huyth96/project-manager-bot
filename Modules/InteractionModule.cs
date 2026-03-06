@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Data.Sqlite;
@@ -72,6 +72,7 @@ public sealed class InteractionModule(
             $"- Kênh github-commits: <#{setupResult.GitHubCommitsChannelId}>\n" +
             $"- Kênh thông báo toàn cục: <#{setupResult.GlobalTaskFeedChannelId}>\n" +
             $"- Kênh shop: <#{setupResult.ShopChannelId}>\n" +
+            $"- Kênh music: <#{setupResult.MusicChannelId}>\n" +
             $"- Mã dự án: `{project.Id}`",
             ephemeral: true);
     }
@@ -109,6 +110,7 @@ public sealed class InteractionModule(
             $"- Kênh github-commits: <#{setupResult.GitHubCommitsChannelId}>\n" +
             $"- Kênh thông báo toàn cục: <#{setupResult.GlobalTaskFeedChannelId}>\n" +
             $"- Kênh shop: <#{setupResult.ShopChannelId}>\n" +
+            $"- Kênh music: <#{setupResult.MusicChannelId}>\n" +
             $"- Mã dự án: `{project.Id}`",
             ephemeral: true);
     }
@@ -3512,7 +3514,6 @@ public sealed class StandupReportModal : IModal
     [ModalTextInput("standup_blockers", TextInputStyle.Paragraph, maxLength: 1200)]
     public string Blockers { get; set; } = "Không có";
 }
-
 
 
 
