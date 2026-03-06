@@ -17,6 +17,9 @@ public sealed class YouTubeMusicService
     private const int HistoryLimit = 10;
     private const int QueuePreviewLimit = 5;
     private const int RecentPreviewLimit = 5;
+    private static readonly IEmote AddTrackButtonEmote = Emote.Parse(MusicPanelConstants.MusicEmoji);
+    private static readonly IEmote PauseButtonEmote = Emote.Parse(MusicPanelConstants.PauseEmoji);
+    private static readonly IEmote RefreshButtonEmote = Emote.Parse(MusicPanelConstants.EqualizerEmoji);
 
     private static readonly Regex YouTubeIdRegex = new("^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled);
     private static readonly Regex UrlRegex = new(@"https?://\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -769,18 +772,19 @@ public sealed class YouTubeMusicService
     private static MessageComponent BuildPanelComponents(MusicPlaybackStatus status)
     {
         var builder = new ComponentBuilder()
-            .WithButton("➕ Thêm bài", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, row: 0)
-            .WithButton("⏮️ Lùi", MusicPanelConstants.PreviousButtonId, ButtonStyle.Secondary, disabled: !status.HasPrevious, row: 0)
+            .WithButton("Thêm bài", MusicPanelConstants.AddTrackButtonId, ButtonStyle.Success, emote: AddTrackButtonEmote, row: 0)
+            .WithButton("⏮️ Lùi", MusicPanelConstants.PreviousButtonId, ButtonStyle.Secondary, row: 0, disabled: !status.HasPrevious)
             .WithButton(
-                status.IsPaused ? "▶️ Tiếp tục" : "⏸️ Tạm dừng",
+                status.IsPaused ? "Tiếp tục" : "Tạm dừng",
                 MusicPanelConstants.PauseResumeButtonId,
                 ButtonStyle.Primary,
+                emote: PauseButtonEmote,
                 disabled: !status.IsPlaying,
                 row: 0)
-            .WithButton("⏭️ Tiếp", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.HasNext, row: 0)
-            .WithButton("⏹️ Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
-            .WithButton("🔌 Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
-            .WithButton("🔄 Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
+            .WithButton("⏭️ Tiếp", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, row: 0, disabled: !status.HasNext)
+            .WithButton("⏹️ Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, row: 0, disabled: !status.IsConnected)
+            .WithButton("🎧 Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Secondary, row: 1, disabled: !status.IsConnected)
+            .WithButton("Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, emote: RefreshButtonEmote, row: 1);
 
         return builder.Build();
     }
