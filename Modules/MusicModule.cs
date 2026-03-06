@@ -35,6 +35,11 @@ public sealed class MusicModule(
 
         try
         {
+            if (await TryHandlePlaylistChoicePromptAsync(video))
+            {
+                return;
+            }
+
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, video);
             await SendInteractionMessageAsync(BuildPlayResultMessage(result), ephemeral: true);
         }
@@ -226,6 +231,11 @@ public sealed class MusicModule(
 
         try
         {
+            if (await TryHandlePlaylistChoicePromptAsync(modal.VideoReference))
+            {
+                return;
+            }
+
             var result = await _musicService.PlayAsync(Context.Guild.Id, voiceChannel, modal.VideoReference);
             await SendInteractionMessageAsync(BuildPlayResultMessage(result), ephemeral: true);
         }
@@ -261,6 +271,71 @@ public sealed class MusicModule(
         catch (InvalidOperationException ex)
         {
             await SendInteractionMessageAsync(ex.Message, ephemeral: true);
+        }
+    }
+
+    [ComponentInteraction("music:playlist_choice:*:*", true)]
+    public async Task PlaylistChoiceButtonAsync(string action, string token)
+    {
+        if (Context.Interaction is not SocketMessageComponent component)
+        {
+            return;
+        }
+
+        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
+        if (voiceChannel is null)
+        {
+            return;
+        }
+
+        if (string.Equals(action, MusicPanelConstants.PlaylistChoiceCancelAction, StringComparison.Ordinal))
+        {
+            var cancelled = _musicService.CancelPlaylistChoice(Context.Guild.Id, Context.User.Id, token);
+            await UpdatePromptMessageAsync(
+                component,
+                cancelled ? "Đã hủy lựa chọn playlist." : "Lựa chọn playlist đã hết hạn hoặc không còn hợp lệ.");
+            return;
+        }
+
+        try
+        {
+            switch (action)
+            {
+                case MusicPanelConstants.PlaylistChoiceCurrentAction:
+                {
+                    var result = await _musicService.PlayPendingCurrentTrackAsync(
+                        Context.Guild.Id,
+                        Context.User.Id,
+                        token,
+                        voiceChannel);
+
+                    await UpdatePromptMessageAsync(component, "Đã chọn: phát bài hiện tại.");
+                    await SendFollowupAsync(BuildPlayResultMessage(result), ephemeral: true);
+                    break;
+                }
+
+                case MusicPanelConstants.PlaylistChoicePlaylistAction:
+                {
+                    var result = await _musicService.PlayPendingPlaylistAsync(
+                        Context.Guild.Id,
+                        Context.User.Id,
+                        token,
+                        voiceChannel);
+
+                    await UpdatePromptMessageAsync(component, "Đã chọn: phát playlist từ vị trí hiện tại.");
+                    await SendFollowupAsync(BuildPlaylistPlayResultMessage(result), ephemeral: true);
+                    break;
+                }
+
+                default:
+                    await UpdatePromptMessageAsync(component, "Lựa chọn playlist không hợp lệ.");
+                    break;
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            await UpdatePromptMessageAsync(component, "Không thể xử lý lựa chọn playlist.");
+            await SendFollowupAsync(ex.Message, ephemeral: true);
         }
     }
 
@@ -375,6 +450,84 @@ public sealed class MusicModule(
         return $"Đang phát `{result.Title}` trong <#{result.VoiceChannelId}>.\n{result.VideoUrl}";
     }
 
+    private static string BuildPlaylistPlayResultMessage(MusicPlaylistPlayResult result)
+    {
+        if (result.AddedToQueue)
+        {
+            return
+                $"Đã thêm playlist `{result.PlaylistName}` vào hàng đợi ở vị trí `{result.QueuePosition}` " +
+                $"({result.TrackCount} bài, bắt đầu từ index `{result.StartIndex}`).";
+        }
+
+        return
+            $"Đang phát playlist `{result.PlaylistName}` từ bài `{result.FirstTrackTitle}` trong <#{result.VoiceChannelId}> " +
+            $"({result.TrackCount} bài, bắt đầu từ index `{result.StartIndex}`).";
+    }
+
+    private async Task<bool> TryHandlePlaylistChoicePromptAsync(string videoReference)
+    {
+        var prompt = _musicService.CreatePlaylistChoicePrompt(Context.Guild.Id, Context.User.Id, videoReference);
+        if (prompt is null)
+        {
+            return false;
+        }
+
+        await SendInteractionMessageAsync(
+            BuildPlaylistChoicePromptMessage(prompt),
+            ephemeral: true,
+            components: BuildPlaylistChoiceComponents(prompt.Token),
+            autoDeleteEphemeral: false);
+
+        return true;
+    }
+
+    private static string BuildPlaylistChoicePromptMessage(MusicPlaylistChoicePrompt prompt)
+    {
+        if (prompt.SelectedIndex.HasValue)
+        {
+            return
+                $"Phát hiện link YouTube có kèm playlist. Bạn muốn phát riêng bài ở index `{prompt.SelectedIndex.Value}` " +
+                "hay nạp cả playlist bắt đầu từ vị trí này?";
+        }
+
+        return
+            "Phát hiện link YouTube có kèm playlist. Bạn muốn phát riêng bài hiện tại hay nạp cả playlist từ liên kết này?";
+    }
+
+    private static MessageComponent BuildPlaylistChoiceComponents(string token)
+    {
+        return new ComponentBuilder()
+            .WithButton(
+                label: "Chơi bài hiện tại",
+                customId: $"{MusicPanelConstants.PlaylistChoiceButtonPrefix}:{MusicPanelConstants.PlaylistChoiceCurrentAction}:{token}",
+                style: ButtonStyle.Primary)
+            .WithButton(
+                label: "Chơi playlist từ đây",
+                customId: $"{MusicPanelConstants.PlaylistChoiceButtonPrefix}:{MusicPanelConstants.PlaylistChoicePlaylistAction}:{token}",
+                style: ButtonStyle.Success)
+            .WithButton(
+                label: "Hủy",
+                customId: $"{MusicPanelConstants.PlaylistChoiceButtonPrefix}:{MusicPanelConstants.PlaylistChoiceCancelAction}:{token}",
+                style: ButtonStyle.Danger)
+            .Build();
+    }
+
+    private async Task UpdatePromptMessageAsync(SocketMessageComponent component, string text)
+    {
+        try
+        {
+            await component.UpdateAsync(properties =>
+            {
+                properties.Content = text;
+                properties.Components = new ComponentBuilder().Build();
+            });
+        }
+        catch (HttpException ex) when (IsUnknownInteraction(ex))
+        {
+            _logger.LogWarning(ex, "Interaction expired before playlist choice prompt could be updated.");
+        }
+    }
+
     private async Task<IVoiceChannel?> ValidateControllerVoiceChannelAsync(bool requireVoiceChannel)
     {
         if (Context.User is not SocketGuildUser guildUser)
@@ -425,25 +578,29 @@ public sealed class MusicModule(
         }
     }
 
-    private async Task SendInteractionMessageAsync(string text, bool ephemeral)
+    private async Task SendInteractionMessageAsync(
+        string text,
+        bool ephemeral,
+        MessageComponent? components = null,
+        bool autoDeleteEphemeral = true)
     {
         if (Context.Interaction.HasResponded)
         {
-            await SendFollowupAsync(text, ephemeral);
+            await SendFollowupAsync(text, ephemeral, components, autoDeleteEphemeral);
             return;
         }
 
         try
         {
-            await base.RespondAsync(text: text, ephemeral: ephemeral);
-            if (ephemeral)
+            await base.RespondAsync(text: text, ephemeral: ephemeral, components: components);
+            if (ephemeral && autoDeleteEphemeral)
             {
                 _ = DeleteOriginalResponseAfterDelayAsync(TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
             }
         }
         catch (HttpException ex) when (IsInteractionAlreadyAcknowledged(ex))
         {
-            await SendFollowupAsync(text, ephemeral);
+            await SendFollowupAsync(text, ephemeral, components, autoDeleteEphemeral);
         }
         catch (HttpException ex) when (IsUnknownInteraction(ex))
         {
@@ -451,12 +608,16 @@ public sealed class MusicModule(
         }
     }
 
-    private async Task SendFollowupAsync(string text, bool ephemeral)
+    private async Task SendFollowupAsync(
+        string text,
+        bool ephemeral,
+        MessageComponent? components = null,
+        bool autoDeleteEphemeral = true)
     {
         try
         {
-            var message = await base.FollowupAsync(text: text, ephemeral: ephemeral);
-            if (ephemeral)
+            var message = await base.FollowupAsync(text: text, ephemeral: ephemeral, components: components);
+            if (ephemeral && autoDeleteEphemeral)
             {
                 _ = DeleteFollowupAfterDelayAsync(message, TimeSpan.FromSeconds(EphemeralAutoDeleteSeconds));
             }

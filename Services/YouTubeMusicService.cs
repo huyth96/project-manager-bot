@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using Discord;
 using Discord.WebSocket;
 using Lavalink4NET;
@@ -8,6 +9,8 @@ using Lavalink4NET.DiscordNet;
 using Lavalink4NET.Events.Players;
 using Lavalink4NET.Players;
 using Lavalink4NET.Tracks;
+using Microsoft.Extensions.Options;
+using ProjectManagerBot.Options;
 
 namespace ProjectManagerBot.Services;
 
@@ -17,6 +20,7 @@ public sealed class YouTubeMusicService
     private const int HistoryLimit = 10;
     private const int QueuePreviewLimit = 5;
     private const int RecentPreviewLimit = 5;
+    private static readonly TimeSpan PendingPlaylistChoiceLifetime = TimeSpan.FromMinutes(10);
     private static readonly IEmote AddTrackButtonEmote = Emote.Parse(MusicPanelConstants.MusicEmoji);
     private static readonly IEmote PauseButtonEmote = Emote.Parse(MusicPanelConstants.PauseEmoji);
     private static readonly IEmote RefreshButtonEmote = Emote.Parse(MusicPanelConstants.EqualizerEmoji);
@@ -29,15 +33,25 @@ public sealed class YouTubeMusicService
     private readonly DiscordSocketClient _discordClient;
     private readonly ILogger<YouTubeMusicService> _logger;
     private readonly ConcurrentDictionary<ulong, GuildMusicSession> _sessions = new();
+    private readonly ConcurrentDictionary<string, PendingPlaylistChoice> _pendingPlaylistChoices = new();
+    private readonly HttpClient _lavalinkHttpClient;
 
     public YouTubeMusicService(
         IAudioService audioService,
         DiscordSocketClient discordClient,
-        ILogger<YouTubeMusicService> logger)
+        ILogger<YouTubeMusicService> logger,
+        IOptions<LavalinkOptions> lavalinkOptions)
     {
         _audioService = audioService;
         _discordClient = discordClient;
         _logger = logger;
+        var options = lavalinkOptions.Value;
+        _lavalinkHttpClient = new HttpClient
+        {
+            BaseAddress = new Uri(options.BaseAddress),
+        };
+
+        _lavalinkHttpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", options.Passphrase);
         _audioService.TrackStarted += OnTrackStartedAsync;
         _audioService.TrackEnded += OnTrackEndedAsync;
         _audioService.TrackException += OnTrackExceptionAsync;
@@ -140,6 +154,169 @@ public sealed class YouTubeMusicService
             VoiceChannelId: targetChannel.Id,
             AddedToQueue: false,
             QueuePosition: 0);
+    }
+
+    public MusicPlaylistChoicePrompt? CreatePlaylistChoicePrompt(ulong guildId, ulong userId, string videoReference)
+    {
+        CleanupExpiredPlaylistChoices();
+
+        if (!TryCreatePlaylistChoiceRequest(videoReference, out var request))
+        {
+            return null;
+        }
+
+        var token = Guid.NewGuid().ToString("N")[..12];
+        _pendingPlaylistChoices[token] = new PendingPlaylistChoice(
+            guildId,
+            userId,
+            request.CurrentTrackReference,
+            request.PlaylistReference,
+            request.SelectedIndex,
+            DateTimeOffset.UtcNow);
+
+        return new MusicPlaylistChoicePrompt(token, request.SelectedIndex);
+    }
+
+    public bool CancelPlaylistChoice(ulong guildId, ulong userId, string token)
+    {
+        if (!TryGetValidPlaylistChoice(token, out var pendingChoice) ||
+            pendingChoice.GuildId != guildId ||
+            pendingChoice.UserId != userId)
+        {
+            return false;
+        }
+
+        return _pendingPlaylistChoices.TryRemove(token, out _);
+    }
+
+    public async Task<MusicPlayResult> PlayPendingCurrentTrackAsync(
+        ulong guildId,
+        ulong userId,
+        string token,
+        IVoiceChannel targetChannel,
+        CancellationToken cancellationToken = default)
+    {
+        var pendingChoice = TakePendingPlaylistChoice(guildId, userId, token);
+        return await PlayAsync(guildId, targetChannel, pendingChoice.CurrentTrackReference, cancellationToken);
+    }
+
+    public async Task<MusicPlaylistPlayResult> PlayPendingPlaylistAsync(
+        ulong guildId,
+        ulong userId,
+        string token,
+        IVoiceChannel targetChannel,
+        CancellationToken cancellationToken = default)
+    {
+        var pendingChoice = TakePendingPlaylistChoice(guildId, userId, token);
+        return await PlayPlaylistAsync(
+            guildId,
+            targetChannel,
+            pendingChoice.PlaylistReference,
+            pendingChoice.SelectedIndex,
+            cancellationToken);
+    }
+
+    public async Task<MusicPlaylistPlayResult> PlayPlaylistAsync(
+        ulong guildId,
+        IVoiceChannel targetChannel,
+        string playlistReference,
+        int? selectedIndex = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(playlistReference))
+        {
+            throw new InvalidOperationException("Hãy nhập URL playlist YouTube hợp lệ.");
+        }
+
+        var playlistLoad = await LoadPlaylistEntriesAsync(playlistReference, selectedIndex, cancellationToken);
+        if (playlistLoad.Tracks.Count == 0)
+        {
+            throw new InvalidOperationException("Không tìm thấy bài nào hợp lệ trong playlist này.");
+        }
+
+        var session = GetOrCreateSession(guildId);
+        var player = await JoinPlayerAsync(guildId, targetChannel, cancellationToken);
+        MusicTrackEntry? entryToPlay = null;
+        var queuePosition = 0;
+        var queuedTailEntries = new List<MusicTrackEntry>();
+
+        lock (session.StateGate)
+        {
+            if (HasActivePlayback(player, session))
+            {
+                queuePosition = session.Queue.Count + 1;
+                session.Queue.AddRange(playlistLoad.Tracks);
+            }
+            else
+            {
+                entryToPlay = playlistLoad.Tracks[0];
+                session.CurrentTrack = entryToPlay;
+                session.ForwardTracks.Clear();
+
+                if (playlistLoad.Tracks.Count > 1)
+                {
+                    queuedTailEntries.AddRange(playlistLoad.Tracks.Skip(1));
+                    session.Queue.AddRange(queuedTailEntries);
+                }
+            }
+        }
+
+        if (entryToPlay is null)
+        {
+            await RefreshPanelAsync(guildId, cancellationToken);
+            return new MusicPlaylistPlayResult(
+                PlaylistName: playlistLoad.PlaylistName,
+                FirstTrackTitle: playlistLoad.Tracks[0].Title,
+                VoiceChannelId: targetChannel.Id,
+                AddedToQueue: true,
+                QueuePosition: queuePosition,
+                TrackCount: playlistLoad.Tracks.Count,
+                StartIndex: playlistLoad.StartIndex + 1);
+        }
+
+        try
+        {
+            await player.PlayAsync(entryToPlay.Reference, cancellationToken: cancellationToken);
+            entryToPlay.UpdateFromTrack(player.CurrentTrack);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            lock (session.StateGate)
+            {
+                if (ReferenceEquals(session.CurrentTrack, entryToPlay))
+                {
+                    session.CurrentTrack = null;
+                }
+
+                foreach (var queuedTailEntry in queuedTailEntries)
+                {
+                    session.Queue.Remove(queuedTailEntry);
+                }
+            }
+
+            _logger.LogWarning(
+                ex,
+                "Lavalink playlist playback failed. GuildId={GuildId}, PlaylistReference={PlaylistReference}",
+                guildId,
+                ToSafeReference(playlistReference));
+
+            throw new InvalidOperationException("Không thể phát playlist YouTube này qua Lavalink. Hãy thử playlist khác.");
+        }
+
+        await RefreshPanelAsync(guildId, cancellationToken);
+
+        return new MusicPlaylistPlayResult(
+            PlaylistName: playlistLoad.PlaylistName,
+            FirstTrackTitle: entryToPlay.Title,
+            VoiceChannelId: targetChannel.Id,
+            AddedToQueue: false,
+            QueuePosition: 0,
+            TrackCount: playlistLoad.Tracks.Count,
+            StartIndex: playlistLoad.StartIndex + 1);
     }
 
     public async Task<MusicTrackResult?> PreviousAsync(ulong guildId, CancellationToken cancellationToken = default)
@@ -1147,6 +1324,179 @@ public sealed class YouTubeMusicService
         return compact.Length <= maxLength ? compact : $"{compact[..maxLength]}...";
     }
 
+    private async Task<PlaylistLoadResult> LoadPlaylistEntriesAsync(
+        string playlistReference,
+        int? preferredIndex,
+        CancellationToken cancellationToken)
+    {
+        using var response = await _lavalinkHttpClient.GetAsync(
+            $"v4/loadtracks?identifier={Uri.EscapeDataString(playlistReference)}",
+            cancellationToken);
+
+        using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var payload = await JsonDocument.ParseAsync(responseStream, cancellationToken: cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException("Không thể tải playlist từ Lavalink lúc này.");
+        }
+
+        var root = payload.RootElement;
+        var loadType = root.TryGetProperty("loadType", out var loadTypeElement)
+            ? loadTypeElement.GetString()
+            : null;
+
+        if (!string.Equals(loadType, "playlist", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(loadType, "error", StringComparison.OrdinalIgnoreCase) &&
+                root.TryGetProperty("data", out var errorElement) &&
+                errorElement.TryGetProperty("message", out var messageElement))
+            {
+                throw new InvalidOperationException(messageElement.GetString() ?? "Không thể tải playlist từ Lavalink.");
+            }
+
+            throw new InvalidOperationException("URL này không được Lavalink nhận là playlist YouTube hợp lệ.");
+        }
+
+        if (!root.TryGetProperty("data", out var dataElement))
+        {
+            throw new InvalidOperationException("Lavalink không trả về dữ liệu playlist hợp lệ.");
+        }
+
+        var playlistName = "Playlist YouTube";
+        var selectedTrack = -1;
+
+        if (dataElement.TryGetProperty("info", out var infoElement))
+        {
+            if (infoElement.TryGetProperty("name", out var playlistNameElement) &&
+                !string.IsNullOrWhiteSpace(playlistNameElement.GetString()))
+            {
+                playlistName = playlistNameElement.GetString()!;
+            }
+
+            if (infoElement.TryGetProperty("selectedTrack", out var selectedTrackElement) &&
+                selectedTrackElement.ValueKind is JsonValueKind.Number &&
+                selectedTrackElement.TryGetInt32(out var resolvedSelectedTrack))
+            {
+                selectedTrack = resolvedSelectedTrack;
+            }
+        }
+
+        if (!dataElement.TryGetProperty("tracks", out var tracksElement) ||
+            tracksElement.ValueKind is not JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Playlist này không có track hợp lệ để phát.");
+        }
+
+        var tracks = new List<MusicTrackEntry>();
+        foreach (var trackElement in tracksElement.EnumerateArray())
+        {
+            if (!trackElement.TryGetProperty("info", out var trackInfo) ||
+                !trackInfo.TryGetProperty("uri", out var uriElement))
+            {
+                continue;
+            }
+
+            var rawUri = uriElement.GetString();
+            if (string.IsNullOrWhiteSpace(rawUri))
+            {
+                continue;
+            }
+
+            string normalizedReference;
+            try
+            {
+                normalizedReference = NormalizeVideoReference(rawUri);
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            var entry = new MusicTrackEntry(normalizedReference);
+            var title = trackInfo.TryGetProperty("title", out var titleElement)
+                ? titleElement.GetString()
+                : null;
+
+            entry.UpdateFromMetadata(title, rawUri);
+            tracks.Add(entry);
+        }
+
+        if (tracks.Count == 0)
+        {
+            throw new InvalidOperationException("Không tìm thấy bài nào hợp lệ trong playlist này.");
+        }
+
+        var resolvedStartIndex = ResolvePlaylistStartIndex(selectedTrack, preferredIndex, tracks.Count);
+        if (resolvedStartIndex > 0)
+        {
+            tracks = tracks.Skip(resolvedStartIndex).ToList();
+        }
+
+        return new PlaylistLoadResult(playlistName, tracks, resolvedStartIndex);
+    }
+
+    private static int ResolvePlaylistStartIndex(int selectedTrack, int? preferredIndex, int trackCount)
+    {
+        if (selectedTrack >= 0 && selectedTrack < trackCount)
+        {
+            return selectedTrack;
+        }
+
+        if (preferredIndex.HasValue)
+        {
+            var preferredZeroBasedIndex = Math.Max(0, preferredIndex.Value - 1);
+            if (preferredZeroBasedIndex < trackCount)
+            {
+                return preferredZeroBasedIndex;
+            }
+        }
+
+        return 0;
+    }
+
+    private void CleanupExpiredPlaylistChoices()
+    {
+        var expirationThreshold = DateTimeOffset.UtcNow - PendingPlaylistChoiceLifetime;
+        foreach (var pendingChoice in _pendingPlaylistChoices)
+        {
+            if (pendingChoice.Value.CreatedAtUtc < expirationThreshold)
+            {
+                _pendingPlaylistChoices.TryRemove(pendingChoice.Key, out _);
+            }
+        }
+    }
+
+    private PendingPlaylistChoice TakePendingPlaylistChoice(ulong guildId, ulong userId, string token)
+    {
+        CleanupExpiredPlaylistChoices();
+
+        if (!_pendingPlaylistChoices.TryRemove(token, out var pendingChoice))
+        {
+            throw new InvalidOperationException("Lựa chọn playlist đã hết hạn hoặc không còn hợp lệ.");
+        }
+
+        if (pendingChoice.GuildId != guildId || pendingChoice.UserId != userId)
+        {
+            throw new InvalidOperationException("Bạn không thể dùng lựa chọn playlist của người khác.");
+        }
+
+        return pendingChoice;
+    }
+
+    private bool TryGetValidPlaylistChoice(string token, out PendingPlaylistChoice pendingChoice)
+    {
+        CleanupExpiredPlaylistChoices();
+
+        if (_pendingPlaylistChoices.TryGetValue(token, out pendingChoice!))
+        {
+            return true;
+        }
+
+        pendingChoice = default!;
+        return false;
+    }
+
     private static string NormalizeVideoReference(string videoReference)
     {
         var trimmed = videoReference.Trim();
@@ -1173,9 +1523,95 @@ public sealed class YouTubeMusicService
         throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
     }
 
+    private static bool TryCreatePlaylistChoiceRequest(string videoReference, out PlaylistChoiceRequest request)
+    {
+        var trimmed = videoReference.Trim();
+        if (trimmed.Length == 0)
+        {
+            request = default!;
+            return false;
+        }
+
+        var urlMatch = UrlRegex.Match(trimmed);
+        if (!urlMatch.Success)
+        {
+            request = default!;
+            return false;
+        }
+
+        var candidateUrl = TrimTrailingUrlPunctuation(urlMatch.Value);
+        if (!Uri.TryCreate(candidateUrl, UriKind.Absolute, out var absoluteUri))
+        {
+            request = default!;
+            return false;
+        }
+
+        if (!TryExtractYouTubePlaylistId(absoluteUri, out var playlistId) ||
+            !TryExtractYouTubeVideoId(absoluteUri, out var videoId))
+        {
+            request = default!;
+            return false;
+        }
+
+        var selectedIndex = TryReadPlaylistIndex(absoluteUri);
+        var playlistReference = $"https://www.youtube.com/playlist?list={Uri.EscapeDataString(playlistId)}";
+
+        request = new PlaylistChoiceRequest(
+            CurrentTrackReference: $"https://www.youtube.com/watch?v={videoId}",
+            PlaylistReference: playlistReference,
+            SelectedIndex: selectedIndex);
+
+        return true;
+    }
+
     private static string TrimTrailingUrlPunctuation(string value)
     {
         return value.TrimEnd('.', ',', ';', ':', ')', ']', '}', '"', '\'');
+    }
+
+    private static bool TryExtractYouTubePlaylistId(Uri uri, out string playlistId)
+    {
+        if (!IsYouTubeHost(uri.Host))
+        {
+            playlistId = string.Empty;
+            return false;
+        }
+
+        return TryReadQueryValue(uri, "list", out playlistId) && !string.IsNullOrWhiteSpace(playlistId);
+    }
+
+    private static int? TryReadPlaylistIndex(Uri uri)
+    {
+        if (!TryReadQueryValue(uri, "index", out var rawIndex))
+        {
+            return null;
+        }
+
+        return int.TryParse(rawIndex, out var index) && index > 0 ? index : null;
+    }
+
+    private static bool TryReadQueryValue(Uri uri, string key, out string value)
+    {
+        foreach (var part in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split('=', 2);
+            if (kv.Length == 0)
+            {
+                continue;
+            }
+
+            var currentKey = Uri.UnescapeDataString(kv[0]);
+            if (!currentKey.Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            value = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private static bool TryExtractYouTubeVideoId(string value, out string videoId)
@@ -1205,7 +1641,7 @@ public sealed class YouTubeMusicService
             return TryReadVideoId(uri.AbsolutePath.Trim('/'), out videoId);
         }
 
-        if (host == "youtube.com" || host.EndsWith(".youtube.com", StringComparison.Ordinal))
+        if (IsYouTubeHost(host))
         {
             foreach (var part in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -1240,6 +1676,12 @@ public sealed class YouTubeMusicService
 
         videoId = string.Empty;
         return false;
+    }
+
+    private static bool IsYouTubeHost(string host)
+    {
+        var normalizedHost = host.ToLowerInvariant();
+        return normalizedHost == "youtube.com" || normalizedHost.EndsWith(".youtube.com", StringComparison.Ordinal);
     }
 
     private static bool TryReadVideoId(string rawValue, out string videoId)
@@ -1301,6 +1743,19 @@ public sealed class YouTubeMusicService
 
         public string VideoUrl { get; private set; }
 
+        public void UpdateFromMetadata(string? title, string? videoUrl)
+        {
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                Title = title;
+            }
+
+            if (!string.IsNullOrWhiteSpace(videoUrl))
+            {
+                VideoUrl = videoUrl;
+            }
+        }
+
         public void UpdateFromTrack(LavalinkTrack? track)
         {
             if (track is null)
@@ -1312,6 +1767,24 @@ public sealed class YouTubeMusicService
             VideoUrl = track.Uri?.ToString() ?? Reference;
         }
     }
+
+    private sealed record PlaylistChoiceRequest(
+        string CurrentTrackReference,
+        string PlaylistReference,
+        int? SelectedIndex);
+
+    private sealed record PendingPlaylistChoice(
+        ulong GuildId,
+        ulong UserId,
+        string CurrentTrackReference,
+        string PlaylistReference,
+        int? SelectedIndex,
+        DateTimeOffset CreatedAtUtc);
+
+    private sealed record PlaylistLoadResult(
+        string PlaylistName,
+        List<MusicTrackEntry> Tracks,
+        int StartIndex);
 }
 
 public sealed record MusicPlayResult(
@@ -1320,6 +1793,19 @@ public sealed record MusicPlayResult(
     ulong VoiceChannelId,
     bool AddedToQueue,
     int QueuePosition);
+
+public sealed record MusicPlaylistChoicePrompt(
+    string Token,
+    int? SelectedIndex);
+
+public sealed record MusicPlaylistPlayResult(
+    string PlaylistName,
+    string FirstTrackTitle,
+    ulong VoiceChannelId,
+    bool AddedToQueue,
+    int QueuePosition,
+    int TrackCount,
+    int StartIndex);
 
 public sealed record MusicTrackResult(
     string Title,

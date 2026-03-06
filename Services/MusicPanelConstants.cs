@@ -27,6 +27,10 @@ internal static class MusicPanelConstants
     public const string StopButtonId = "music:stop";
     public const string LeaveButtonId = "music:leave";
     public const string RefreshButtonId = "music:refresh";
+    public const string PlaylistChoiceButtonPrefix = "music:playlist_choice";
+    public const string PlaylistChoiceCurrentAction = "current";
+    public const string PlaylistChoicePlaylistAction = "playlist";
+    public const string PlaylistChoiceCancelAction = "cancel";
 
     public const string AddTrackModalId = "music:add_track_modal";
 }
