@@ -735,29 +735,33 @@ public sealed class YouTubeMusicService
         var embed = new EmbedBuilder()
             .WithTitle(MusicPanelConstants.PanelTitle)
             .WithColor(GetPanelColor(status))
-            .WithAuthor(BuildPanelHeader(status), guild.IconUrl)
+            .WithAuthor(BuildPanelHeader(status), GetPanelStatusImageUrl(status))
             .WithDescription(BuildPanelDescription(status, currentTitle, currentUrl));
 
-        embed.AddField("🎛️ Trạng thái", BuildPlaybackStateLabel(status), true);
+        embed.AddField($"{MusicPanelConstants.EqualizerEmoji} Trạng thái", BuildPlaybackStateLabel(status), true);
         embed.AddField(
-            "🎧 Kênh voice",
+            $"{MusicPanelConstants.HeadphonesEmoji} Kênh voice",
             status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "Chưa kết nối",
             true);
 
         if (currentTrack is not null)
         {
-            embed.AddField("🎤 Tác giả", currentTrack.Author, true);
-            embed.AddField("⏱️ Thời lượng", FormatDuration(currentTrack.Duration), true);
+            embed.AddField($"{MusicPanelConstants.MusicEmoji} Tác giả", currentTrack.Author, true);
+            embed.AddField($"{MusicPanelConstants.TimerEmoji} Thời lượng", FormatDuration(currentTrack.Duration), true);
 
             if (currentTrack.ArtworkUri is not null)
             {
                 embed.WithThumbnailUrl(currentTrack.ArtworkUri.ToString());
             }
         }
+        else
+        {
+            embed.WithThumbnailUrl(GetPanelStatusImageUrl(status));
+        }
 
-        embed.AddField("📼 Tiếp theo", upcomingPreview, false);
-        embed.AddField("🕘 10 bài gần nhất", recentPreview, false);
-        embed.WithFooter($"🎚️ {guild.Name} • /music play để thêm bài");
+        embed.AddField($"{MusicPanelConstants.VinylEmoji} Tiếp theo", upcomingPreview, false);
+        embed.AddField($"{MusicPanelConstants.MusicEmoji} 10 bài gần nhất", recentPreview, false);
+        embed.WithFooter($"{MusicPanelConstants.EqualizerEmoji} {guild.Name} • /music play để thêm bài");
 
         return embed.Build();
     }
@@ -810,20 +814,20 @@ public sealed class YouTubeMusicService
     {
         if (!status.IsConnected)
         {
-            return "💤 Chưa kết nối";
+            return $"{MusicPanelConstants.TimerEmoji} Chưa kết nối";
         }
 
         if (status.IsPaused)
         {
-            return "⏸️ Tạm dừng";
+            return $"{MusicPanelConstants.PauseEmoji} Tạm dừng";
         }
 
         if (status.IsPlaying)
         {
-            return "▶️ Đang phát";
+            return $"{MusicPanelConstants.MusicEmoji} Đang phát";
         }
 
-        return "🎧 Sẵn sàng";
+        return $"{MusicPanelConstants.HeadphonesEmoji} Sẵn sàng";
     }
 
     private static string BuildUpcomingPreview(GuildMusicSession session)
@@ -835,7 +839,7 @@ public sealed class YouTubeMusicService
 
         if (upcomingEntries.Length == 0)
         {
-            return "📭 Hàng đợi đang trống.";
+            return $"{MusicPanelConstants.TimerEmoji} Hàng đợi đang trống.";
         }
 
         var builder = new StringBuilder();
@@ -867,7 +871,7 @@ public sealed class YouTubeMusicService
     {
         if (session.PreviousTracks.Count == 0)
         {
-            return "🕘 Chưa có lịch sử gần đây.";
+            return $"{MusicPanelConstants.TimerEmoji} Chưa có lịch sử gần đây.";
         }
 
         var recentEntries = session.PreviousTracks.TakeLast(RecentPreviewLimit).Reverse().ToArray();
@@ -912,31 +916,56 @@ public sealed class YouTubeMusicService
     {
         if (status.IsPaused)
         {
-            return "⏸️ Deck đang tạm dừng";
+            return $"{MusicPanelConstants.PauseEmoji} Deck đang tạm dừng";
         }
 
         if (status.IsPlaying)
         {
-            return "🎶 Deck đang phát";
+            return $"{MusicPanelConstants.VinylEmoji} Deck đang phát";
         }
 
         if (status.IsConnected)
         {
-            return "🎧 Deck đã sẵn sàng";
+            return $"{MusicPanelConstants.HeadphonesEmoji} Deck đã sẵn sàng";
         }
 
-        return "💤 Deck đang chờ bài mới";
+        return $"{MusicPanelConstants.TimerEmoji} Deck đang chờ bài mới";
     }
 
     private static string BuildPanelDescription(MusicPlaybackStatus status, string? currentTitle, string? currentUrl)
     {
         if (string.IsNullOrWhiteSpace(currentTitle))
         {
-            return "💤 **Máy nghe nhạc đang chờ bài mới.**\n➕ Bấm `Thêm bài` hoặc dùng `/music play` để bắt đầu.";
+            return $"{MusicPanelConstants.TimerEmoji} **Máy nghe nhạc đang chờ bài mới.**\n➕ Bấm `Thêm bài` hoặc dùng `/music play` để bắt đầu.";
         }
 
-        var stateText = status.IsPaused ? "⏸️ Đang tạm dừng" : status.IsPlaying ? "🎶 Đang phát" : "🎧 Sẵn sàng";
-        return $"{stateText}\n💿 **[{currentTitle}]({currentUrl ?? "https://www.youtube.com"})**";
+        var stateText = status.IsPaused
+            ? $"{MusicPanelConstants.PauseEmoji} Đang tạm dừng"
+            : status.IsPlaying
+                ? $"{MusicPanelConstants.MusicEmoji} Đang phát"
+                : $"{MusicPanelConstants.HeadphonesEmoji} Sẵn sàng";
+
+        return $"{stateText}\n{MusicPanelConstants.VinylEmoji} **[{currentTitle}]({currentUrl ?? "https://www.youtube.com"})**";
+    }
+
+    private static string GetPanelStatusImageUrl(MusicPlaybackStatus status)
+    {
+        if (status.IsPaused)
+        {
+            return MusicPanelConstants.PauseEmojiUrl;
+        }
+
+        if (status.IsPlaying)
+        {
+            return MusicPanelConstants.VinylEmojiUrl;
+        }
+
+        if (status.IsConnected)
+        {
+            return MusicPanelConstants.HeadphonesEmojiUrl;
+        }
+
+        return MusicPanelConstants.TimerEmojiUrl;
     }
 
     private static void PushHistory(List<MusicTrackEntry> list, MusicTrackEntry entry)
