@@ -14,8 +14,6 @@ namespace ProjectManagerBot.Services;
 public sealed class YouTubeMusicService
 {
     private const float DefaultVolume = 1F;
-    private const float MinVolume = 1F;
-    private const float MaxVolume = 100F;
     private const int HistoryLimit = 10;
     private const int QueuePreviewLimit = 5;
     private const int RecentPreviewLimit = 5;
@@ -310,27 +308,6 @@ public sealed class YouTubeMusicService
         return await NextAsync(guildId, cancellationToken) is not null;
     }
 
-    public async Task<float?> AdjustVolumeAsync(ulong guildId, float delta, CancellationToken cancellationToken = default)
-    {
-        if (!TryGetPlayer(guildId, out var player))
-        {
-            return null;
-        }
-
-        var session = GetOrCreateSession(guildId);
-        var targetVolume = Math.Clamp(player.Volume + delta, MinVolume, MaxVolume);
-        await player.SetVolumeAsync(targetVolume, cancellationToken);
-
-        lock (session.StateGate)
-        {
-            session.Volume = targetVolume;
-            session.HasCustomVolume = true;
-        }
-
-        await RefreshPanelAsync(guildId, cancellationToken);
-        return targetVolume;
-    }
-
     public async Task<bool> StopAsync(ulong guildId, CancellationToken cancellationToken = default)
     {
         if (!TryGetPlayer(guildId, out var player))
@@ -426,7 +403,6 @@ public sealed class YouTubeMusicService
         var session = GetOrCreateSession(guildId);
         var discordVoiceChannelId = TryGetBotVoiceChannelId(guildId);
         string? currentTitle;
-        float volume;
         ulong? panelChannelId;
         int queueCount;
         int recentCount;
@@ -436,7 +412,6 @@ public sealed class YouTubeMusicService
         lock (session.StateGate)
         {
             currentTitle = session.CurrentTrack?.Title;
-            volume = session.Volume;
             panelChannelId = session.PanelChannelId;
             queueCount = session.Queue.Count;
             recentCount = session.PreviousTracks.Count;
@@ -452,7 +427,6 @@ public sealed class YouTubeMusicService
                 IsPaused: false,
                 CurrentTitle: currentTitle,
                 VoiceChannelId: discordVoiceChannelId,
-                Volume: volume,
                 PanelChannelId: panelChannelId,
                 QueueCount: queueCount,
                 RecentCount: recentCount,
@@ -473,7 +447,6 @@ public sealed class YouTubeMusicService
             IsPaused: isPaused,
             CurrentTitle: playerTrack?.Title ?? currentTitle,
             VoiceChannelId: voiceChannelId,
-            Volume: player.Volume,
             PanelChannelId: panelChannelId,
             QueueCount: queueCount,
             RecentCount: recentCount,
@@ -772,7 +745,6 @@ public sealed class YouTubeMusicService
             "Kênh voice",
             status.VoiceChannelId.HasValue ? $"<#{status.VoiceChannelId.Value}>" : "Chưa kết nối",
             true);
-        embed.AddField("Âm lượng", $"{status.Volume:0}%", true);
 
         if (currentTrack is not null)
         {
@@ -806,8 +778,6 @@ public sealed class YouTubeMusicService
             .WithButton("Tiếp", MusicPanelConstants.SkipButtonId, ButtonStyle.Secondary, disabled: !status.HasNext, row: 0)
             .WithButton("Dừng", MusicPanelConstants.StopButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 0)
             .WithButton("Rời kênh", MusicPanelConstants.LeaveButtonId, ButtonStyle.Danger, disabled: !status.IsConnected, row: 1)
-            .WithButton("Âm lượng -", MusicPanelConstants.VolumeDownButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
-            .WithButton("Âm lượng +", MusicPanelConstants.VolumeUpButtonId, ButtonStyle.Secondary, disabled: !status.IsConnected, row: 1)
             .WithButton("Làm mới", MusicPanelConstants.RefreshButtonId, ButtonStyle.Secondary, row: 1);
 
         return builder.Build();
@@ -1222,7 +1192,6 @@ public sealed class YouTubeMusicService
 
         public float Volume { get; set; } = DefaultVolume;
 
-        public bool HasCustomVolume { get; set; }
 
         public MusicTrackEntry? CurrentTrack { get; set; }
 
@@ -1281,7 +1250,6 @@ public sealed record MusicPlaybackStatus(
     bool IsPaused,
     string? CurrentTitle,
     ulong? VoiceChannelId,
-    float Volume,
     ulong? PanelChannelId,
     int QueueCount,
     int RecentCount,

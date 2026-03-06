@@ -13,7 +13,6 @@ public sealed class MusicModule(
     ILogger<MusicModule> logger) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
-    private const float VolumeStep = 1F;
 
     private readonly YouTubeMusicService _musicService = musicService;
     private readonly ILogger<MusicModule> _logger = logger;
@@ -97,7 +96,6 @@ public sealed class MusicModule(
             $"Voice: {voiceChannelText}\n" +
             $"Hàng đợi: `{status.QueueCount}`\n" +
             $"Gần đây: `{status.RecentCount}`\n" +
-            $"Âm lượng: `{status.Volume:0}%`" +
             panelText,
             ephemeral: true);
     }
@@ -355,18 +353,6 @@ public sealed class MusicModule(
             ephemeral: true);
     }
 
-    [ComponentInteraction(MusicPanelConstants.VolumeDownButtonId, true)]
-    public async Task VolumeDownButtonAsync()
-    {
-        await ChangeVolumeAsync(-VolumeStep);
-    }
-
-    [ComponentInteraction(MusicPanelConstants.VolumeUpButtonId, true)]
-    public async Task VolumeUpButtonAsync()
-    {
-        await ChangeVolumeAsync(VolumeStep);
-    }
-
     [ComponentInteraction(MusicPanelConstants.RefreshButtonId, true)]
     public async Task RefreshButtonAsync()
     {
@@ -377,25 +363,6 @@ public sealed class MusicModule(
 
         await _musicService.RefreshPanelAsync(Context.Guild.Id);
         await SendInteractionMessageAsync("Đã làm mới panel music.", ephemeral: true);
-    }
-
-    private async Task ChangeVolumeAsync(float delta)
-    {
-        if (!await TryAcknowledgeAsync(ephemeral: true))
-        {
-            return;
-        }
-
-        var voiceChannel = await ValidateControllerVoiceChannelAsync(requireVoiceChannel: true);
-        if (voiceChannel is null)
-        {
-            return;
-        }
-
-        var volume = await _musicService.AdjustVolumeAsync(Context.Guild.Id, delta);
-        await SendInteractionMessageAsync(
-            volume.HasValue ? $"Đã cập nhật âm lượng: `{volume.Value:0}%`." : "Không có player đang hoạt động.",
-            ephemeral: true);
     }
 
     private static string BuildPlayResultMessage(MusicPlayResult result)

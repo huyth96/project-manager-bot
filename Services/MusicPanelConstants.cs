@@ -12,8 +12,6 @@ internal static class MusicPanelConstants
     public const string SkipButtonId = "music:skip";
     public const string StopButtonId = "music:stop";
     public const string LeaveButtonId = "music:leave";
-    public const string VolumeDownButtonId = "music:volume_down";
-    public const string VolumeUpButtonId = "music:volume_up";
     public const string RefreshButtonId = "music:refresh";
 
     public const string AddTrackModalId = "music:add_track_modal";
