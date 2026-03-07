@@ -68,7 +68,8 @@ public sealed class YouTubeMusicService
             throw new InvalidOperationException("Hãy nhập URL hoặc video ID YouTube hợp lệ.");
         }
 
-        var normalizedReference = NormalizeVideoReference(videoReference);
+        var resolvedReference = await ResolvePlaybackReferenceAsync(videoReference, cancellationToken);
+        var normalizedReference = resolvedReference.Reference;
         var session = GetOrCreateSession(guildId);
 
         _logger.LogDebug(
@@ -88,12 +89,14 @@ public sealed class YouTubeMusicService
             if (HasActivePlayback(player, session))
             {
                 queuedEntry = new MusicTrackEntry(normalizedReference);
+                queuedEntry.UpdateFromMetadata(resolvedReference.Title, resolvedReference.VideoUrl);
                 session.Queue.Add(queuedEntry);
                 queuePosition = session.Queue.Count;
             }
             else
             {
                 entryToPlay = new MusicTrackEntry(normalizedReference);
+                entryToPlay.UpdateFromMetadata(resolvedReference.Title, resolvedReference.VideoUrl);
                 session.CurrentTrack = entryToPlay;
                 session.ForwardTracks.Clear();
             }
@@ -1313,6 +1316,148 @@ public sealed class YouTubeMusicService
             : ToSafeReference(reference, 60);
     }
 
+    private async Task<ResolvedTrackReference> ResolvePlaybackReferenceAsync(
+        string videoReference,
+        CancellationToken cancellationToken)
+    {
+        var trimmed = videoReference.Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new InvalidOperationException("Hãy nhập URL, video ID hoặc từ khóa YouTube hợp lệ.");
+        }
+
+        if (TryNormalizeDirectReference(trimmed, out var normalizedReference))
+        {
+            return new ResolvedTrackReference(normalizedReference, null, normalizedReference);
+        }
+
+        if (LooksLikeDirectUrl(trimmed))
+        {
+            throw new InvalidOperationException("Hãy nhập URL, video ID hoặc từ khóa YouTube hợp lệ.");
+        }
+
+        return await SearchBestTrackAsync(trimmed, cancellationToken);
+    }
+
+    private async Task<ResolvedTrackReference> SearchBestTrackAsync(
+        string query,
+        CancellationToken cancellationToken)
+    {
+        InvalidOperationException? lastSearchError = null;
+
+        foreach (var identifier in new[] { $"ytmsearch:{query}", $"ytsearch:{query}" })
+        {
+            try
+            {
+                var result = await TryLoadBestTrackAsync(identifier, cancellationToken);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                lastSearchError = ex;
+            }
+        }
+
+        if (lastSearchError is not null)
+        {
+            throw lastSearchError;
+        }
+
+        throw new InvalidOperationException($"Không tìm thấy kết quả phù hợp cho từ khóa `{query}`.");
+    }
+
+    private async Task<ResolvedTrackReference?> TryLoadBestTrackAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        using var response = await _lavalinkHttpClient.GetAsync(
+            $"v4/loadtracks?identifier={Uri.EscapeDataString(identifier)}",
+            cancellationToken);
+
+        using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var payload = await JsonDocument.ParseAsync(responseStream, cancellationToken: cancellationToken);
+
+        var root = payload.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException("Không thể tìm kiếm YouTube qua Lavalink lúc này.");
+        }
+
+        var loadType = root.TryGetProperty("loadType", out var loadTypeElement)
+            ? loadTypeElement.GetString()
+            : null;
+
+        switch (loadType?.ToLowerInvariant())
+        {
+            case "track":
+                if (root.TryGetProperty("data", out var trackElement) &&
+                    TryCreateTrackEntryFromLoadTrack(trackElement, out var singleTrackEntry))
+                {
+                    return new ResolvedTrackReference(singleTrackEntry.Reference, singleTrackEntry.Title, singleTrackEntry.VideoUrl);
+                }
+
+                return null;
+
+            case "search":
+                if (!root.TryGetProperty("data", out var searchResultsElement) ||
+                    searchResultsElement.ValueKind is not JsonValueKind.Array)
+                {
+                    return null;
+                }
+
+                foreach (var searchTrackElement in searchResultsElement.EnumerateArray())
+                {
+                    if (TryCreateTrackEntryFromLoadTrack(searchTrackElement, out var searchedTrackEntry))
+                    {
+                        return new ResolvedTrackReference(searchedTrackEntry.Reference, searchedTrackEntry.Title, searchedTrackEntry.VideoUrl);
+                    }
+                }
+
+                return null;
+
+            case "empty":
+                return null;
+
+            case "error":
+                if (root.TryGetProperty("data", out var errorElement) &&
+                    errorElement.TryGetProperty("message", out var messageElement) &&
+                    !string.IsNullOrWhiteSpace(messageElement.GetString()))
+                {
+                    throw new InvalidOperationException(messageElement.GetString()!);
+                }
+
+                throw new InvalidOperationException("Không thể tìm kiếm YouTube qua Lavalink lúc này.");
+
+            default:
+                return null;
+        }
+    }
+
+    private static bool TryNormalizeDirectReference(string value, out string normalizedReference)
+    {
+        try
+        {
+            normalizedReference = NormalizeVideoReference(value);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            normalizedReference = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool LooksLikeDirectUrl(string value)
+    {
+        return UrlRegex.IsMatch(value) ||
+               value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+               value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ToSafeReference(string value, int maxLength = 180)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -1391,35 +1536,10 @@ public sealed class YouTubeMusicService
         var tracks = new List<MusicTrackEntry>();
         foreach (var trackElement in tracksElement.EnumerateArray())
         {
-            if (!trackElement.TryGetProperty("info", out var trackInfo) ||
-                !trackInfo.TryGetProperty("uri", out var uriElement))
+            if (TryCreateTrackEntryFromLoadTrack(trackElement, out var entry))
             {
-                continue;
+                tracks.Add(entry);
             }
-
-            var rawUri = uriElement.GetString();
-            if (string.IsNullOrWhiteSpace(rawUri))
-            {
-                continue;
-            }
-
-            string normalizedReference;
-            try
-            {
-                normalizedReference = NormalizeVideoReference(rawUri);
-            }
-            catch (InvalidOperationException)
-            {
-                continue;
-            }
-
-            var entry = new MusicTrackEntry(normalizedReference);
-            var title = trackInfo.TryGetProperty("title", out var titleElement)
-                ? titleElement.GetString()
-                : null;
-
-            entry.UpdateFromMetadata(title, rawUri);
-            tracks.Add(entry);
         }
 
         if (tracks.Count == 0)
@@ -1453,6 +1573,48 @@ public sealed class YouTubeMusicService
         }
 
         return 0;
+    }
+
+    private static bool TryCreateTrackEntryFromLoadTrack(JsonElement trackElement, out MusicTrackEntry entry)
+    {
+        entry = null!;
+
+        if (!trackElement.TryGetProperty("info", out var trackInfo))
+        {
+            return false;
+        }
+
+        var rawUri = trackInfo.TryGetProperty("uri", out var uriElement)
+            ? uriElement.GetString()
+            : null;
+
+        var rawIdentifier = trackInfo.TryGetProperty("identifier", out var identifierElement)
+            ? identifierElement.GetString()
+            : null;
+
+        var rawReference = !string.IsNullOrWhiteSpace(rawUri) ? rawUri : rawIdentifier;
+        if (string.IsNullOrWhiteSpace(rawReference))
+        {
+            return false;
+        }
+
+        string normalizedReference;
+        try
+        {
+            normalizedReference = NormalizeVideoReference(rawReference);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        entry = new MusicTrackEntry(normalizedReference);
+        var title = trackInfo.TryGetProperty("title", out var titleElement)
+            ? titleElement.GetString()
+            : null;
+
+        entry.UpdateFromMetadata(title, rawUri ?? normalizedReference);
+        return true;
     }
 
     private void CleanupExpiredPlaylistChoices()
@@ -1785,6 +1947,11 @@ public sealed class YouTubeMusicService
         string PlaylistName,
         List<MusicTrackEntry> Tracks,
         int StartIndex);
+
+    private sealed record ResolvedTrackReference(
+        string Reference,
+        string? Title,
+        string? VideoUrl);
 }
 
 public sealed record MusicPlayResult(

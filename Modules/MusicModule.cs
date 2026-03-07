@@ -17,9 +17,9 @@ public sealed class MusicModule(
     private readonly YouTubeMusicService _musicService = musicService;
     private readonly ILogger<MusicModule> _logger = logger;
 
-    [SlashCommand("play", "Phát nhạc YouTube trong voice channel bạn đang tham gia.")]
+    [SlashCommand("play", "Phát nhạc YouTube bằng URL, video ID hoặc từ khóa.")]
     public async Task PlayAsync(
-        [Summary("video", "URL hoặc video ID YouTube")]
+        [Summary("video", "URL, video ID hoặc từ khóa YouTube")]
         string video)
     {
         if (!await TryAcknowledgeAsync(ephemeral: true))
@@ -667,11 +667,11 @@ public sealed class MusicAddTrackModal : IModal
 {
     public string Title => "Thêm Bài Nhạc";
 
-    [InputLabel("URL hoặc video ID")]
+    [InputLabel("URL, video ID hoặc từ khóa")]
     [ModalTextInput(
         "music_video_reference",
         TextInputStyle.Short,
-        placeholder: "https://www.youtube.com/watch?v=... hoặc video ID",
+        placeholder: "https://www.youtube.com/watch?v=... hoặc nhập từ khóa như 'faded'",
         maxLength: 500)]
     public string VideoReference { get; set; } = string.Empty;
 }
