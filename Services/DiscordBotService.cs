@@ -11,12 +11,14 @@ public sealed class DiscordBotService(
     DiscordSocketClient client,
     InteractionService interactionService,
     IServiceProvider serviceProvider,
+    BotAssistantService botAssistantService,
     IOptions<DiscordBotOptions> options,
     ILogger<DiscordBotService> logger) : BackgroundService
 {
     private readonly DiscordSocketClient _client = client;
     private readonly InteractionService _interactionService = interactionService;
     private readonly IServiceProvider _serviceProvider = serviceProvider;
+    private readonly BotAssistantService _botAssistantService = botAssistantService;
     private readonly DiscordBotOptions _options = options.Value;
     private readonly ILogger<DiscordBotService> _logger = logger;
     private const string GuestRoleName = "Guest";
@@ -117,17 +119,23 @@ public sealed class DiscordBotService(
             return;
         }
 
-        if (socketMessage.Channel is not SocketTextChannel textChannel)
+        if (socketMessage is not SocketUserMessage message)
+        {
+            return;
+        }
+
+        await HandleShowcaseMessageAsync(message);
+        await HandleAssistantMentionAsync(message);
+    }
+
+    private async Task HandleShowcaseMessageAsync(SocketUserMessage message)
+    {
+        if (message.Channel is not SocketTextChannel textChannel)
         {
             return;
         }
 
         if (!textChannel.Name.Contains("showcase", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        if (socketMessage is not SocketUserMessage message)
         {
             return;
         }
@@ -146,6 +154,38 @@ public sealed class DiscordBotService(
         {
             _logger.LogWarning(ex, "Không thể tự tạo thread showcase cho message {MessageId}", message.Id);
         }
+    }
+
+    private async Task HandleAssistantMentionAsync(SocketUserMessage message)
+    {
+        if (_client.CurrentUser is null || !IsGuildTextOrThread(message.Channel))
+        {
+            return;
+        }
+
+        var botUserId = _client.CurrentUser.Id;
+        if (!message.MentionedUsers.Any(x => x.Id == botUserId))
+        {
+            return;
+        }
+
+        var prompt = ExtractPrompt(message.Content, botUserId);
+        using var _ = message.Channel.EnterTypingState();
+
+        string reply;
+        try
+        {
+            reply = await _botAssistantService.GenerateReplyAsync(message, prompt);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Không thể xử lý assistant mention cho message {MessageId}", message.Id);
+            reply = "Tôi chưa xử lý được câu hỏi này lúc này. Hãy thử lại sau ít phút.";
+        }
+
+        await message.Channel.SendMessageAsync(
+            text: reply,
+            messageReference: new MessageReference(message.Id));
     }
 
     private Task OnReactionAddedAsync(
@@ -371,5 +411,18 @@ public sealed class DiscordBotService(
             LogSeverity.Debug => LogLevel.Trace,
             _ => LogLevel.Information
         };
+    }
+
+    private static bool IsGuildTextOrThread(ISocketMessageChannel channel)
+    {
+        return channel is SocketTextChannel or SocketThreadChannel;
+    }
+
+    private static string ExtractPrompt(string content, ulong botUserId)
+    {
+        return content
+            .Replace($"<@{botUserId}>", string.Empty, StringComparison.Ordinal)
+            .Replace($"<@!{botUserId}>", string.Empty, StringComparison.Ordinal)
+            .Trim();
     }
 }

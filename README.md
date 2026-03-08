@@ -23,6 +23,31 @@ Hoặc trên Windows:
 
 Nếu muốn dùng tính năng phát nhạc YouTube, hãy chạy một node Lavalink và cấu hình các biến `LAVALINK_*` trong `.env` (xem `.env.example`).
 
+## Assistant Chat Qua `@bot`
+
+Bot đã có MVP cho hội thoại tự nhiên khi được mention bằng `@bot` trong kênh project hoặc thread của project.
+
+Bot hiện lấy context từ:
+- snapshot dự án hiện tại trong DB: sprint active, task, bug, backlog
+- standup gần đây
+- một phần recent messages của channel/thread đang hỏi
+
+Để bật phần trả lời bằng LLM:
+
+1. Điền các biến `ASSISTANT_*` trong `.env`, tối thiểu là `ASSISTANT_API_KEY`
+2. Trong Discord Developer Portal, bật `Message Content Intent`
+3. Khởi động lại bot
+
+Ví dụ:
+
+```text
+@bot tiến độ sprint đang thế nào?
+@bot task nào cần xử lý ngay?
+@bot team đang tích cực hay tiêu cực?
+```
+
+Nếu chưa cấu hình `ASSISTANT_API_KEY`, bot vẫn trả lời theo snapshot hiện tại nhưng sẽ không diễn giải sâu bằng AI.
+
 ## Theo Dõi Push Từ Repo Game (GitHub)
 
 Bot hỗ trợ theo dõi **repo GitHub bên ngoài** (repo game của bạn), không phụ thuộc repo source của bot.

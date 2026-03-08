@@ -15,6 +15,7 @@ ApplyEnvironmentOverrides(builder.Configuration);
 builder.Services.Configure<DiscordBotOptions>(builder.Configuration.GetSection("Discord"));
 builder.Services.Configure<GitHubTrackingOptions>(builder.Configuration.GetSection("GitHub"));
 builder.Services.Configure<LavalinkOptions>(builder.Configuration.GetSection("Lavalink"));
+builder.Services.Configure<AssistantOptions>(builder.Configuration.GetSection("Assistant"));
 
 builder.Services.AddDbContextFactory<BotDbContext>(options =>
 {
@@ -27,6 +28,7 @@ builder.Services.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConf
     GatewayIntents = GatewayIntents.Guilds |
                      GatewayIntents.GuildMembers |
                      GatewayIntents.GuildMessages |
+                     GatewayIntents.MessageContent |
                      GatewayIntents.GuildMessageReactions |
                      GatewayIntents.GuildVoiceStates,
     AlwaysDownloadUsers = false,
@@ -46,7 +48,9 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddSingleton<ProjectInsightService>();
 builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddSingleton<BotAssistantService>();
 
 builder.Services.AddLavalink();
 builder.Services.ConfigureLavalink(options =>
@@ -64,6 +68,11 @@ builder.Services.AddHttpClient("GitHubTracking", client =>
 {
     client.DefaultRequestHeaders.UserAgent.ParseAdd("ProjectManagerBot/1.0");
     client.Timeout = TimeSpan.FromSeconds(15);
+});
+builder.Services.AddHttpClient("Assistant", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("ProjectManagerBot/1.0");
+    client.Timeout = TimeSpan.FromSeconds(45);
 });
 builder.Services.AddSingleton<GitHubTrackingService>();
 
@@ -172,6 +181,54 @@ static void ApplyEnvironmentOverrides(ConfigurationManager configuration)
     if (int.TryParse(lavalinkReadyTimeoutRaw, out var lavalinkReadyTimeout))
     {
         configuration["Lavalink:ReadyTimeoutSeconds"] = lavalinkReadyTimeout.ToString();
+    }
+
+    var assistantEnabledRaw = Environment.GetEnvironmentVariable("ASSISTANT_ENABLED");
+    if (bool.TryParse(assistantEnabledRaw, out var assistantEnabled))
+    {
+        configuration["Assistant:Enabled"] = assistantEnabled.ToString();
+    }
+
+    var assistantApiKey = Environment.GetEnvironmentVariable("ASSISTANT_API_KEY");
+    if (!string.IsNullOrWhiteSpace(assistantApiKey))
+    {
+        configuration["Assistant:ApiKey"] = assistantApiKey.Trim();
+    }
+
+    var assistantBaseUrl = Environment.GetEnvironmentVariable("ASSISTANT_BASE_URL");
+    if (!string.IsNullOrWhiteSpace(assistantBaseUrl))
+    {
+        configuration["Assistant:BaseUrl"] = assistantBaseUrl.Trim();
+    }
+
+    var assistantModel = Environment.GetEnvironmentVariable("ASSISTANT_MODEL");
+    if (!string.IsNullOrWhiteSpace(assistantModel))
+    {
+        configuration["Assistant:Model"] = assistantModel.Trim();
+    }
+
+    var assistantTemperatureRaw = Environment.GetEnvironmentVariable("ASSISTANT_TEMPERATURE");
+    if (double.TryParse(assistantTemperatureRaw, out var assistantTemperature))
+    {
+        configuration["Assistant:Temperature"] = assistantTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    var assistantMaxRecentMessagesRaw = Environment.GetEnvironmentVariable("ASSISTANT_MAX_RECENT_MESSAGES");
+    if (int.TryParse(assistantMaxRecentMessagesRaw, out var assistantMaxRecentMessages))
+    {
+        configuration["Assistant:MaxRecentMessages"] = assistantMaxRecentMessages.ToString();
+    }
+
+    var assistantMaxStandupDaysRaw = Environment.GetEnvironmentVariable("ASSISTANT_MAX_STANDUP_DAYS");
+    if (int.TryParse(assistantMaxStandupDaysRaw, out var assistantMaxStandupDays))
+    {
+        configuration["Assistant:MaxStandupDays"] = assistantMaxStandupDays.ToString();
+    }
+
+    var assistantMaxAttentionItemsRaw = Environment.GetEnvironmentVariable("ASSISTANT_MAX_ATTENTION_ITEMS");
+    if (int.TryParse(assistantMaxAttentionItemsRaw, out var assistantMaxAttentionItems))
+    {
+        configuration["Assistant:MaxAttentionItems"] = assistantMaxAttentionItems.ToString();
     }
 }
 

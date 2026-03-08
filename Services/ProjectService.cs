@@ -80,6 +80,20 @@ public sealed class ProjectService(
                 cancellationToken);
     }
 
+    public async Task<Project?> GetProjectByChannelHierarchyAsync(
+        ulong channelId,
+        ulong? parentChannelId,
+        CancellationToken cancellationToken = default)
+    {
+        var project = await GetProjectByChannelAsync(channelId, cancellationToken);
+        if (project is not null || !parentChannelId.HasValue)
+        {
+            return project;
+        }
+
+        return await GetProjectByChannelAsync(parentChannelId.Value, cancellationToken);
+    }
+
     public async Task SetGitHubCommitsChannelAsync(int projectId, ulong channelId, CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
