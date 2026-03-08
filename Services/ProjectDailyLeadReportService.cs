@@ -65,8 +65,12 @@ public sealed class ProjectDailyLeadReportService(
             var todayMemoryMessages = await db.ProjectMemoryMessages
                 .AsNoTracking()
                 .Where(x => x.ProjectId == projectId && x.LocalDate == _studioTime.LocalDate)
-                .OrderByDescending(x => x.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
+
+            todayMemoryMessages = todayMemoryMessages
+                .OrderByDescending(x => x.CreatedAtUtc)
+                .ThenByDescending(x => x.Id)
+                .ToList();
 
             var todayDigest = context.Memory.DailyDigests
                 .FirstOrDefault(x => x.Date.Date == _studioTime.LocalDate.Date);

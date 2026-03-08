@@ -216,8 +216,12 @@ public sealed class ProjectMemoryService(
         var archivedMessages = await db.ProjectMemoryMessages
             .AsNoTracking()
             .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate && x.LocalDate <= toDate)
-            .OrderBy(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken);
+
+        archivedMessages = archivedMessages
+            .OrderBy(x => x.CreatedAtUtc)
+            .ThenBy(x => x.Id)
+            .ToList();
 
         var standupReports = await db.StandupReports
             .AsNoTracking()
@@ -266,9 +270,14 @@ public sealed class ProjectMemoryService(
         var candidates = await db.ProjectMemoryMessages
             .AsNoTracking()
             .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate && x.MessageId != excludedMessageId)
-            .OrderByDescending(x => x.CreatedAtUtc)
+            .OrderByDescending(x => x.Id)
             .Take(MaxRelevantCandidates)
             .ToListAsync(cancellationToken);
+
+        candidates = candidates
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .ThenByDescending(x => x.Id)
+            .ToList();
 
         var scoredMessages = candidates
             .Select(x => new
