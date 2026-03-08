@@ -48,7 +48,9 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddSingleton<ProjectMemoryService>();
 builder.Services.AddSingleton<ProjectInsightService>();
+builder.Services.AddSingleton<ProjectDailyLeadReportService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<BotAssistantService>();
 
@@ -89,10 +91,13 @@ await using (var scope = host.Services.CreateAsyncScope())
     await db.Database.EnsureCreatedAsync();
     await EnsureColumnAsync(db, "Projects", "GlobalNotificationChannelId", "INTEGER NULL");
     await EnsureColumnAsync(db, "Projects", "GitHubCommitsChannelId", "INTEGER NULL");
+    await EnsureColumnAsync(db, "Projects", "LastLeadReportDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "StartDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "EndDateLocal", "TEXT NULL");
     await EnsureGitHubRepoBindingsTableAsync(db);
+    await EnsureProjectMemoryMessagesTableAsync(db);
+    await EnsureProjectDailyDigestsTableAsync(db);
 }
 
 await host.RunAsync();
@@ -230,6 +235,30 @@ static void ApplyEnvironmentOverrides(ConfigurationManager configuration)
     {
         configuration["Assistant:MaxAttentionItems"] = assistantMaxAttentionItems.ToString();
     }
+
+    var assistantMemoryLookbackDaysRaw = Environment.GetEnvironmentVariable("ASSISTANT_MEMORY_LOOKBACK_DAYS");
+    if (int.TryParse(assistantMemoryLookbackDaysRaw, out var assistantMemoryLookbackDays))
+    {
+        configuration["Assistant:MemoryLookbackDays"] = assistantMemoryLookbackDays.ToString();
+    }
+
+    var assistantMemoryDigestDaysRaw = Environment.GetEnvironmentVariable("ASSISTANT_MEMORY_DIGEST_DAYS");
+    if (int.TryParse(assistantMemoryDigestDaysRaw, out var assistantMemoryDigestDays))
+    {
+        configuration["Assistant:MemoryDigestDays"] = assistantMemoryDigestDays.ToString();
+    }
+
+    var assistantMaxRelevantMemoryMessagesRaw = Environment.GetEnvironmentVariable("ASSISTANT_MAX_RELEVANT_MEMORY_MESSAGES");
+    if (int.TryParse(assistantMaxRelevantMemoryMessagesRaw, out var assistantMaxRelevantMemoryMessages))
+    {
+        configuration["Assistant:MaxRelevantMemoryMessages"] = assistantMaxRelevantMemoryMessages.ToString();
+    }
+
+    var assistantMaxDailyMemoryDigestsRaw = Environment.GetEnvironmentVariable("ASSISTANT_MAX_DAILY_MEMORY_DIGESTS");
+    if (int.TryParse(assistantMaxDailyMemoryDigestsRaw, out var assistantMaxDailyMemoryDigests))
+    {
+        configuration["Assistant:MaxDailyMemoryDigests"] = assistantMaxDailyMemoryDigests.ToString();
+    }
 }
 
 static void LoadDotEnvFromCommonPaths()
@@ -325,6 +354,8 @@ static async Task EnsureColumnAsync(BotDbContext db, string table, string column
                 "ALTER TABLE \"Projects\" ADD COLUMN \"GlobalNotificationChannelId\" INTEGER NULL;",
             ("Projects", "GitHubCommitsChannelId", "INTEGER NULL") =>
                 "ALTER TABLE \"Projects\" ADD COLUMN \"GitHubCommitsChannelId\" INTEGER NULL;",
+            ("Projects", "LastLeadReportDateLocal", "TEXT NULL") =>
+                "ALTER TABLE \"Projects\" ADD COLUMN \"LastLeadReportDateLocal\" TEXT NULL;",
             ("TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"TaskItems\" ADD COLUMN \"LastOverdueReminderDateLocal\" TEXT NULL;",
             ("Sprints", "StartDateLocal", "TEXT NULL") =>
@@ -353,6 +384,72 @@ static async Task EnsureGitHubRepoBindingsTableAsync(BotDbContext db)
     await db.Database.ExecuteSqlRawAsync(
         "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_GitHubRepoBindings_ProjectId_RepoFullName_Branch\" " +
         "ON \"GitHubRepoBindings\" (\"ProjectId\", \"RepoFullName\", \"Branch\");");
+}
+
+static async Task EnsureProjectMemoryMessagesTableAsync(BotDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"ProjectMemoryMessages\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ProjectMemoryMessages\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"MessageId\" INTEGER NOT NULL, " +
+        "\"ChannelId\" INTEGER NOT NULL, " +
+        "\"ChannelName\" TEXT NOT NULL, " +
+        "\"ThreadId\" INTEGER NULL, " +
+        "\"ThreadName\" TEXT NULL, " +
+        "\"AuthorId\" INTEGER NOT NULL, " +
+        "\"AuthorName\" TEXT NOT NULL, " +
+        "\"IsBot\" INTEGER NOT NULL, " +
+        "\"CreatedAtUtc\" TEXT NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"Content\" TEXT NOT NULL, " +
+        "\"NormalizedContent\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_ProjectMemoryMessages_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ProjectMemoryMessages_MessageId\" " +
+        "ON \"ProjectMemoryMessages\" (\"MessageId\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_ProjectMemoryMessages_ProjectId_CreatedAtUtc\" " +
+        "ON \"ProjectMemoryMessages\" (\"ProjectId\", \"CreatedAtUtc\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_ProjectMemoryMessages_ProjectId_LocalDate\" " +
+        "ON \"ProjectMemoryMessages\" (\"ProjectId\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_ProjectMemoryMessages_ProjectId_ChannelId_CreatedAtUtc\" " +
+        "ON \"ProjectMemoryMessages\" (\"ProjectId\", \"ChannelId\", \"CreatedAtUtc\");");
+}
+
+static async Task EnsureProjectDailyDigestsTableAsync(BotDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"ProjectDailyDigests\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ProjectDailyDigests\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"MessageCount\" INTEGER NOT NULL, " +
+        "\"DistinctAuthorCount\" INTEGER NOT NULL, " +
+        "\"UserMessageCount\" INTEGER NOT NULL, " +
+        "\"BotMessageCount\" INTEGER NOT NULL, " +
+        "\"StandupReportCount\" INTEGER NOT NULL, " +
+        "\"BlockerCount\" INTEGER NOT NULL, " +
+        "\"Summary\" TEXT NOT NULL, " +
+        "\"KeywordsJson\" TEXT NOT NULL, " +
+        "\"ActiveChannelsJson\" TEXT NOT NULL, " +
+        "\"HighlightsJson\" TEXT NOT NULL, " +
+        "\"GeneratedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_ProjectDailyDigests_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ProjectDailyDigests_ProjectId_LocalDate\" " +
+        "ON \"ProjectDailyDigests\" (\"ProjectId\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_ProjectDailyDigests_ProjectId_GeneratedAtUtc\" " +
+        "ON \"ProjectDailyDigests\" (\"ProjectId\", \"GeneratedAtUtc\");");
 }
 
 

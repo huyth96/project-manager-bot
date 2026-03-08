@@ -11,18 +11,28 @@ namespace ProjectManagerBot.Services;
 public sealed class ProjectInsightService(
     IDbContextFactory<BotDbContext> dbContextFactory,
     ProjectService projectService,
+    ProjectMemoryService projectMemoryService,
     StudioTimeService studioTime,
     IOptions<AssistantOptions> options,
     ILogger<ProjectInsightService> logger)
 {
+    private const int StandupDisciplineLookbackDays = 14;
+    private const int ExpectedReporterMessageThreshold = 3;
+    private const int StalledInProgressThresholdDays = 3;
+    private const int StalledNotStartedThresholdDays = 2;
+    private const int NonSprintStalledThresholdDays = 5;
+    private static readonly TimeSpan StandupDueTime = new(9, 30, 0);
+
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ProjectService _projectService = projectService;
+    private readonly ProjectMemoryService _projectMemoryService = projectMemoryService;
     private readonly StudioTimeService _studioTime = studioTime;
     private readonly AssistantOptions _options = options.Value;
     private readonly ILogger<ProjectInsightService> _logger = logger;
 
     public async Task<ProjectAssistantContext?> BuildContextAsync(
         SocketUserMessage message,
+        string? question = null,
         CancellationToken cancellationToken = default)
     {
         var parentChannelId = message.Channel is SocketThreadChannel threadChannel
@@ -39,8 +49,76 @@ public sealed class ProjectInsightService(
             return null;
         }
 
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var recentConversation = await LoadRecentConversationAsync(message, cancellationToken);
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await BuildContextCoreAsync(
+            db,
+            project,
+            new AssistantScope(
+                ProjectId: project.Id,
+                ProjectName: project.Name,
+                ChannelId: message.Channel.Id,
+                ChannelName: GetChannelDisplayName(message.Channel),
+                ParentChannelId: parentChannelId,
+                ParentChannelName: GetParentChannelDisplayName(message.Channel),
+                AskingUserId: message.Author.Id,
+                AskingUserName: GetAuthorDisplayName(message.Author)),
+            currentChannelId: parentChannelId ?? message.Channel.Id,
+            currentThreadId: message.Channel is SocketThreadChannel ? message.Channel.Id : null,
+            excludedMessageId: message.Id,
+            question: question,
+            recentConversation: recentConversation,
+            cancellationToken);
+    }
+
+    public async Task<ProjectAssistantContext?> BuildProjectContextAsync(
+        int projectId,
+        string? question = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var project = await db.Projects
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == projectId, cancellationToken);
+
+        if (project is null)
+        {
+            return null;
+        }
+
+        var channelId = project.GlobalNotificationChannelId ?? project.ChannelId;
+        return await BuildContextCoreAsync(
+            db,
+            project,
+            new AssistantScope(
+                ProjectId: project.Id,
+                ProjectName: project.Name,
+                ChannelId: channelId,
+                ChannelName: $"project:{project.Name}",
+                ParentChannelId: null,
+                ParentChannelName: null,
+                AskingUserId: 0,
+                AskingUserName: "Hệ thống"),
+            currentChannelId: channelId,
+            currentThreadId: null,
+            excludedMessageId: 0,
+            question: question,
+            recentConversation: [],
+            cancellationToken);
+    }
+
+    private async Task<ProjectAssistantContext> BuildContextCoreAsync(
+        BotDbContext db,
+        Project project,
+        AssistantScope scope,
+        ulong currentChannelId,
+        ulong? currentThreadId,
+        ulong excludedMessageId,
+        string? question,
+        IReadOnlyList<AssistantConversationMessage> recentConversation,
+        CancellationToken cancellationToken)
+    {
         var activeSprint = await db.Sprints
             .AsNoTracking()
             .FirstOrDefaultAsync(
@@ -60,6 +138,11 @@ public sealed class ProjectInsightService(
             .OrderByDescending(x => x.Id)
             .ToListAsync(cancellationToken);
 
+        var openProjectTasks = await projectTasksQuery
+            .Where(x => x.Type == TaskItemType.Task && x.Status != TaskItemStatus.Done)
+            .OrderBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
         IQueryable<TaskItem> sprintTasksQuery = projectTasksQuery.Where(x => x.SprintId == null);
         if (activeSprint is not null)
         {
@@ -72,24 +155,33 @@ public sealed class ProjectInsightService(
 
         var sprintSnapshot = BuildSprintSnapshot(activeSprint, sprintTasks, backlogCount, openBugs.Count);
         var recentStandups = await LoadRecentStandupsAsync(db, project.Id, cancellationToken);
-        var attentionItems = BuildAttentionItems(activeSprint, sprintTasks, openBugs, recentStandups);
-        var recentConversation = await LoadRecentConversationAsync(message, cancellationToken);
+        var standupDiscipline = await BuildStandupDisciplineAsync(db, project.Id, cancellationToken);
+        var stalledTasks = BuildStalledTasks(activeSprint, sprintTasks, openProjectTasks);
+        var attentionItems = BuildAttentionItems(
+            activeSprint,
+            sprintTasks,
+            openBugs,
+            recentStandups,
+            standupDiscipline,
+            stalledTasks);
+        var memory = await _projectMemoryService.BuildMemoryAsync(
+            project.Id,
+            currentChannelId: currentChannelId,
+            currentThreadId: currentThreadId,
+            excludedMessageId: excludedMessageId,
+            question: question,
+            cancellationToken);
 
         return new ProjectAssistantContext(
             GeneratedAtLocal: _studioTime.LocalNow,
-            Scope: new AssistantScope(
-                ProjectId: project.Id,
-                ProjectName: project.Name,
-                ChannelId: message.Channel.Id,
-                ChannelName: GetChannelDisplayName(message.Channel),
-                ParentChannelId: parentChannelId,
-                ParentChannelName: GetParentChannelDisplayName(message.Channel),
-                AskingUserId: message.Author.Id,
-                AskingUserName: GetAuthorDisplayName(message.Author)),
+            Scope: scope,
             Sprint: sprintSnapshot,
             Standups: recentStandups,
+            StandupDiscipline: standupDiscipline,
+            StalledTasks: stalledTasks,
             AttentionItems: attentionItems.Take(Math.Max(1, _options.MaxAttentionItems)).ToList(),
-            RecentConversation: recentConversation);
+            RecentConversation: recentConversation,
+            Memory: memory);
     }
 
     private async Task<List<AssistantStandupEntry>> LoadRecentStandupsAsync(
@@ -116,6 +208,184 @@ public sealed class ProjectInsightService(
                 Today: TrimForPrompt(x.Today, 180),
                 Blockers: TrimForPrompt(x.Blockers, 180),
                 HasBlockers: HasMeaningfulBlockers(x.Blockers)))
+            .ToList();
+    }
+
+    private async Task<AssistantStandupDisciplineSummary> BuildStandupDisciplineAsync(
+        BotDbContext db,
+        int projectId,
+        CancellationToken cancellationToken)
+    {
+        var fromDate = _studioTime.LocalDate.AddDays(-(StandupDisciplineLookbackDays - 1));
+        var dueDates = EnumerateDueDates(fromDate, _studioTime.LocalDate).ToList();
+
+        var reports = await db.StandupReports
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate)
+            .ToListAsync(cancellationToken);
+
+        var expectedReporters = await BuildExpectedReporterCandidatesAsync(
+            db,
+            projectId,
+            fromDate,
+            reports,
+            cancellationToken);
+
+        var lateReporters = reports
+            .GroupBy(x => x.DiscordUserId)
+            .Select(group =>
+            {
+                var materialized = group
+                    .Select(report =>
+                    {
+                        var reportedAtLocal = TimeZoneInfo.ConvertTime(report.ReportedAtUtc, _studioTime.TimeZone);
+                        var deadlineLocal = report.LocalDate.Add(StandupDueTime);
+                        var lateMinutes = Math.Max(0, (int)Math.Round((reportedAtLocal.DateTime - deadlineLocal).TotalMinutes));
+
+                        return new
+                        {
+                            Report = report,
+                            ReportedAtLocal = reportedAtLocal,
+                            IsLate = lateMinutes > 0,
+                            LateMinutes = lateMinutes
+                        };
+                    })
+                    .OrderBy(x => x.Report.LocalDate)
+                    .ThenBy(x => x.ReportedAtLocal)
+                    .ToList();
+
+                var lateEntries = materialized.Where(x => x.IsLate).ToList();
+                var latest = materialized.LastOrDefault();
+
+                return new AssistantLateReporter(
+                    DiscordUserId: group.Key,
+                    TotalReports: materialized.Count,
+                    LateReports: lateEntries.Count,
+                    OnTimeReports: materialized.Count - lateEntries.Count,
+                    LateRatePercent: materialized.Count == 0 ? 0 : (int)Math.Round((double)lateEntries.Count / materialized.Count * 100, MidpointRounding.AwayFromZero),
+                    AverageLateMinutes: lateEntries.Count == 0 ? null : (int)Math.Round(lateEntries.Average(x => x.LateMinutes), MidpointRounding.AwayFromZero),
+                    LastReportedAtLocal: latest?.ReportedAtLocal,
+                    WasLateLastReport: latest?.IsLate == true);
+            })
+            .Where(x => x.TotalReports > 0)
+            .OrderByDescending(x => x.LateReports)
+            .ThenByDescending(x => x.LateRatePercent)
+            .ThenByDescending(x => x.AverageLateMinutes ?? 0)
+            .ThenByDescending(x => x.TotalReports)
+            .ThenBy(x => x.DiscordUserId)
+            .ToList();
+
+        var reportsLookup = reports
+            .Select(x => (x.DiscordUserId, x.LocalDate))
+            .ToHashSet();
+
+        var missingReporters = expectedReporters
+            .Select(candidate =>
+            {
+                var effectiveDueDates = dueDates
+                    .Where(x => x >= candidate.ActiveSinceDate.Date)
+                    .ToList();
+
+                var missingDates = effectiveDueDates
+                    .Where(x => !reportsLookup.Contains((candidate.DiscordUserId, x)))
+                    .ToList();
+
+                if (missingDates.Count == 0)
+                {
+                    return null;
+                }
+
+                return new AssistantMissingReporter(
+                    DiscordUserId: candidate.DiscordUserId,
+                    MissingDays: missingDates.Count,
+                    SubmittedDays: effectiveDueDates.Count - missingDates.Count,
+                    LastMissingDate: missingDates.Max(),
+                    MissingToday: missingDates.Any(x => x.Date == _studioTime.LocalDate.Date),
+                    BasisSummary: candidate.BuildBasisSummary());
+            })
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .OrderByDescending(x => x.MissingDays)
+            .ThenByDescending(x => x.MissingToday)
+            .ThenByDescending(x => x.LastMissingDate)
+            .ThenBy(x => x.DiscordUserId)
+            .ToList();
+
+        return new AssistantStandupDisciplineSummary(
+            LookbackDays: StandupDisciplineLookbackDays,
+            DueTimeLocal: StandupDueTime,
+            ExpectedReporterCount: expectedReporters.Count,
+            LateReporters: lateReporters,
+            MissingReporters: missingReporters);
+    }
+
+    private async Task<List<ExpectedReporterCandidate>> BuildExpectedReporterCandidatesAsync(
+        BotDbContext db,
+        int projectId,
+        DateTime fromDate,
+        IReadOnlyList<StandupReport> reports,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new Dictionary<ulong, ExpectedReporterCandidateBuilder>();
+
+        var openAssignedTasks = await db.TaskItems
+            .AsNoTracking()
+            .Where(x =>
+                x.ProjectId == projectId &&
+                x.Type == TaskItemType.Task &&
+                x.Status != TaskItemStatus.Done &&
+                x.AssigneeId.HasValue)
+            .Select(x => new
+            {
+                AssigneeId = x.AssigneeId!.Value,
+                x.CreatedAtUtc
+            })
+            .ToListAsync(cancellationToken);
+
+        foreach (var task in openAssignedTasks)
+        {
+            var createdAtLocal = TimeZoneInfo.ConvertTime(task.CreatedAtUtc, _studioTime.TimeZone);
+            var builder = GetOrCreateExpectedReporter(candidates, task.AssigneeId);
+            builder.HasOpenAssignedTask = true;
+            builder.Observe(createdAtLocal.Date);
+        }
+
+        foreach (var report in reports)
+        {
+            var builder = GetOrCreateExpectedReporter(candidates, report.DiscordUserId);
+            builder.HadRecentStandup = true;
+            builder.Observe(report.LocalDate);
+        }
+
+        var activeMessageAuthors = await db.ProjectMemoryMessages
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate && !x.IsBot)
+            .GroupBy(x => x.AuthorId)
+            .Select(group => new
+            {
+                DiscordUserId = group.Key,
+                MessageCount = group.Count(),
+                FirstSeenDate = group.Min(x => x.LocalDate)
+            })
+            .ToListAsync(cancellationToken);
+
+        foreach (var author in activeMessageAuthors.Where(x => x.MessageCount >= ExpectedReporterMessageThreshold))
+        {
+            var builder = GetOrCreateExpectedReporter(candidates, author.DiscordUserId);
+            builder.RecentProjectMessageCount = Math.Max(builder.RecentProjectMessageCount, author.MessageCount);
+            builder.Observe(author.FirstSeenDate);
+        }
+
+        return candidates.Values
+            .Where(x => x.ActiveSinceDate.HasValue)
+            .Select(x => new ExpectedReporterCandidate(
+                DiscordUserId: x.DiscordUserId,
+                ActiveSinceDate: x.ActiveSinceDate!.Value,
+                HasOpenAssignedTask: x.HasOpenAssignedTask,
+                HadRecentStandup: x.HadRecentStandup,
+                RecentProjectMessageCount: x.RecentProjectMessageCount))
+            .OrderBy(x => x.ActiveSinceDate)
+            .ThenBy(x => x.DiscordUserId)
             .ToList();
     }
 
@@ -156,7 +426,9 @@ public sealed class ProjectInsightService(
         Sprint? activeSprint,
         IReadOnlyCollection<TaskItem> sprintTasks,
         IReadOnlyCollection<TaskItem> openBugs,
-        IReadOnlyCollection<AssistantStandupEntry> recentStandups)
+        IReadOnlyCollection<AssistantStandupEntry> recentStandups,
+        AssistantStandupDisciplineSummary standupDiscipline,
+        IReadOnlyCollection<AssistantStalledTask> stalledTasks)
     {
         var items = new List<AssistantAttentionItem>();
 
@@ -236,9 +508,141 @@ public sealed class ProjectInsightService(
                     Points: null,
                     AssigneeId: x.DiscordUserId)));
 
+        items.AddRange(
+            stalledTasks
+                .Take(5)
+                .Select(x => new AssistantAttentionItem(
+                    Kind: "stalled_task",
+                    Title: $"Task #{x.TaskId} có dấu hiệu đình trệ",
+                    Summary: $"{x.Title} ({x.Reason})",
+                    TaskId: x.TaskId,
+                    Status: x.Status,
+                    Points: x.Points,
+                    AssigneeId: x.AssigneeId)));
+
+        items.AddRange(
+            standupDiscipline.LateReporters
+                .Where(x => x.LateReports > 0)
+                .Take(3)
+                .Select(x => new AssistantAttentionItem(
+                    Kind: "late_reporter",
+                    Title: $"<@{x.DiscordUserId}> hay trễ standup",
+                    Summary: $"{x.LateReports}/{x.TotalReports} báo cáo trễ trong {standupDiscipline.LookbackDays} ngày gần đây",
+                    TaskId: null,
+                    Status: null,
+                    Points: null,
+                    AssigneeId: x.DiscordUserId)));
+
+        items.AddRange(
+            standupDiscipline.MissingReporters
+                .Take(3)
+                .Select(x => new AssistantAttentionItem(
+                    Kind: "missing_reporter",
+                    Title: $"<@{x.DiscordUserId}> chưa nộp standup",
+                    Summary: $"Thiếu {x.MissingDays} ngày trong {standupDiscipline.LookbackDays} ngày gần đây ({x.BasisSummary})",
+                    TaskId: null,
+                    Status: null,
+                    Points: null,
+                    AssigneeId: x.DiscordUserId)));
+
         return items
             .DistinctBy(x => $"{x.Kind}:{x.TaskId}:{x.Title}")
             .ToList();
+    }
+
+    private List<AssistantStalledTask> BuildStalledTasks(
+        Sprint? activeSprint,
+        IReadOnlyCollection<TaskItem> sprintTasks,
+        IReadOnlyCollection<TaskItem> openProjectTasks)
+    {
+        var candidateTasks = (activeSprint is not null ? sprintTasks : openProjectTasks)
+            .Where(x => x.Type == TaskItemType.Task && x.Status != TaskItemStatus.Done)
+            .ToList();
+
+        var scheduleProgress = CalculateScheduleProgress(activeSprint) ?? 0D;
+        var sprintOverdue = activeSprint is not null && IsSprintOverdue(activeSprint);
+
+        return candidateTasks
+            .Select(task => BuildStalledTask(task, activeSprint is not null, scheduleProgress, sprintOverdue))
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .OrderByDescending(x => x.IsOverdue)
+            .ThenByDescending(x => x.Status == nameof(TaskItemStatus.InProgress))
+            .ThenByDescending(x => x.AgeDays)
+            .ThenByDescending(x => x.Points)
+            .ThenBy(x => x.TaskId)
+            .Take(8)
+            .ToList();
+    }
+
+    private AssistantStalledTask? BuildStalledTask(
+        TaskItem task,
+        bool hasActiveSprint,
+        double scheduleProgress,
+        bool sprintOverdue)
+    {
+        var createdAtLocal = TimeZoneInfo.ConvertTime(task.CreatedAtUtc, _studioTime.TimeZone);
+        var age = _studioTime.LocalNow - createdAtLocal;
+        var ageDays = Math.Max(0, (int)Math.Floor(age.TotalDays));
+
+        if (sprintOverdue)
+        {
+            return new AssistantStalledTask(
+                TaskId: task.Id,
+                Title: task.Title,
+                Status: task.Status.ToString(),
+                Points: task.Points,
+                AssigneeId: task.AssigneeId,
+                AgeDays: ageDays,
+                Reason: "Sprint đã quá hạn nhưng task chưa hoàn thành",
+                IsOverdue: true);
+        }
+
+        if (task.Status == TaskItemStatus.InProgress && age.TotalDays >= StalledInProgressThresholdDays)
+        {
+            return new AssistantStalledTask(
+                TaskId: task.Id,
+                Title: task.Title,
+                Status: task.Status.ToString(),
+                Points: task.Points,
+                AssigneeId: task.AssigneeId,
+                AgeDays: ageDays,
+                Reason: $"Đang làm hơn {StalledInProgressThresholdDays} ngày mà chưa xong",
+                IsOverdue: false);
+        }
+
+        if (hasActiveSprint &&
+            task.Status is TaskItemStatus.Todo or TaskItemStatus.Backlog &&
+            scheduleProgress >= 0.5 &&
+            age.TotalDays >= StalledNotStartedThresholdDays)
+        {
+            return new AssistantStalledTask(
+                TaskId: task.Id,
+                Title: task.Title,
+                Status: task.Status.ToString(),
+                Points: task.Points,
+                AssigneeId: task.AssigneeId,
+                AgeDays: ageDays,
+                Reason: "Đã qua nửa sprint nhưng task vẫn chưa bắt đầu",
+                IsOverdue: false);
+        }
+
+        if (!hasActiveSprint &&
+            task.Status == TaskItemStatus.InProgress &&
+            age.TotalDays >= NonSprintStalledThresholdDays)
+        {
+            return new AssistantStalledTask(
+                TaskId: task.Id,
+                Title: task.Title,
+                Status: task.Status.ToString(),
+                Points: task.Points,
+                AssigneeId: task.AssigneeId,
+                AgeDays: ageDays,
+                Reason: $"Task đã mở hơn {NonSprintStalledThresholdDays} ngày mà chưa hoàn thành",
+                IsOverdue: false);
+        }
+
+        return null;
     }
 
     private AssistantSprintSnapshot BuildSprintSnapshot(
@@ -438,6 +842,33 @@ public sealed class ProjectInsightService(
             ? guildUser.DisplayName
             : author.Username;
     }
+
+    private IEnumerable<DateTime> EnumerateDueDates(DateTime fromDate, DateTime toDate)
+    {
+        for (var date = fromDate.Date; date <= toDate.Date; date = date.AddDays(1))
+        {
+            if (date.Date == _studioTime.LocalDate.Date &&
+                _studioTime.LocalNow.TimeOfDay < StandupDueTime)
+            {
+                continue;
+            }
+
+            yield return date;
+        }
+    }
+
+    private static ExpectedReporterCandidateBuilder GetOrCreateExpectedReporter(
+        IDictionary<ulong, ExpectedReporterCandidateBuilder> candidates,
+        ulong discordUserId)
+    {
+        if (!candidates.TryGetValue(discordUserId, out var builder))
+        {
+            builder = new ExpectedReporterCandidateBuilder(discordUserId);
+            candidates[discordUserId] = builder;
+        }
+
+        return builder;
+    }
 }
 
 public sealed record ProjectAssistantContext(
@@ -445,8 +876,11 @@ public sealed record ProjectAssistantContext(
     AssistantScope Scope,
     AssistantSprintSnapshot Sprint,
     IReadOnlyList<AssistantStandupEntry> Standups,
+    AssistantStandupDisciplineSummary StandupDiscipline,
+    IReadOnlyList<AssistantStalledTask> StalledTasks,
     IReadOnlyList<AssistantAttentionItem> AttentionItems,
-    IReadOnlyList<AssistantConversationMessage> RecentConversation);
+    IReadOnlyList<AssistantConversationMessage> RecentConversation,
+    AssistantProjectMemory Memory);
 
 public sealed record AssistantScope(
     int ProjectId,
@@ -492,6 +926,41 @@ public sealed record AssistantStandupEntry(
     string Blockers,
     bool HasBlockers);
 
+public sealed record AssistantStandupDisciplineSummary(
+    int LookbackDays,
+    TimeSpan DueTimeLocal,
+    int ExpectedReporterCount,
+    IReadOnlyList<AssistantLateReporter> LateReporters,
+    IReadOnlyList<AssistantMissingReporter> MissingReporters);
+
+public sealed record AssistantLateReporter(
+    ulong DiscordUserId,
+    int TotalReports,
+    int LateReports,
+    int OnTimeReports,
+    int LateRatePercent,
+    int? AverageLateMinutes,
+    DateTimeOffset? LastReportedAtLocal,
+    bool WasLateLastReport);
+
+public sealed record AssistantMissingReporter(
+    ulong DiscordUserId,
+    int MissingDays,
+    int SubmittedDays,
+    DateTime? LastMissingDate,
+    bool MissingToday,
+    string BasisSummary);
+
+public sealed record AssistantStalledTask(
+    int TaskId,
+    string Title,
+    string Status,
+    int Points,
+    ulong? AssigneeId,
+    int AgeDays,
+    string Reason,
+    bool IsOverdue);
+
 public sealed record AssistantAttentionItem(
     string Kind,
     string Title,
@@ -508,3 +977,76 @@ public sealed record AssistantConversationMessage(
     string AuthorName,
     bool IsBot,
     string Content);
+
+sealed class ExpectedReporterCandidateBuilder(ulong discordUserId)
+{
+    private const int MessageThreshold = 3;
+
+    public ulong DiscordUserId { get; } = discordUserId;
+    public bool HasOpenAssignedTask { get; set; }
+    public bool HadRecentStandup { get; set; }
+    public int RecentProjectMessageCount { get; set; }
+    public DateTime? ActiveSinceDate { get; private set; }
+
+    public void Observe(DateTime date)
+    {
+        if (!ActiveSinceDate.HasValue || date < ActiveSinceDate.Value)
+        {
+            ActiveSinceDate = date;
+        }
+    }
+
+    public string BuildBasisSummary()
+    {
+        var parts = new List<string>();
+        if (HasOpenAssignedTask)
+        {
+            parts.Add("đang có task mở");
+        }
+
+        if (HadRecentStandup)
+        {
+            parts.Add("đã từng nộp standup");
+        }
+
+        if (RecentProjectMessageCount >= MessageThreshold)
+        {
+            parts.Add($"{RecentProjectMessageCount} tin nhắn project gần đây");
+        }
+
+        return parts.Count == 0
+            ? "có hoạt động gần đây trong project"
+            : string.Join(", ", parts);
+    }
+}
+
+sealed record ExpectedReporterCandidate(
+    ulong DiscordUserId,
+    DateTime ActiveSinceDate,
+    bool HasOpenAssignedTask,
+    bool HadRecentStandup,
+    int RecentProjectMessageCount)
+{
+    public string BuildBasisSummary()
+    {
+        var parts = new List<string>();
+        if (HasOpenAssignedTask)
+        {
+            parts.Add("đang có task mở");
+        }
+
+        if (HadRecentStandup)
+        {
+            parts.Add("đã từng nộp standup");
+        }
+
+        if (RecentProjectMessageCount >= 3)
+        {
+            parts.Add($"{RecentProjectMessageCount} tin nhắn project gần đây");
+        }
+
+        return parts.Count == 0
+            ? "có hoạt động gần đây trong project"
+            : string.Join(", ", parts);
+    }
+}

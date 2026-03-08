@@ -11,6 +11,8 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<User> Users => Set<User>();
     public DbSet<StandupReport> StandupReports => Set<StandupReport>();
     public DbSet<GitHubRepoBinding> GitHubRepoBindings => Set<GitHubRepoBinding>();
+    public DbSet<ProjectMemoryMessage> ProjectMemoryMessages => Set<ProjectMemoryMessage>();
+    public DbSet<ProjectDailyDigest> ProjectDailyDigests => Set<ProjectDailyDigest>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -80,6 +82,41 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             entity.Property(x => x.Branch).HasMaxLength(100);
             entity.Property(x => x.LastSeenCommitSha).HasMaxLength(100);
             entity.HasIndex(x => new { x.ProjectId, x.RepoFullName, x.Branch }).IsUnique();
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProjectMemoryMessage>(entity =>
+        {
+            entity.Property(x => x.ChannelName).HasMaxLength(100);
+            entity.Property(x => x.ThreadName).HasMaxLength(100);
+            entity.Property(x => x.AuthorName).HasMaxLength(100);
+            entity.Property(x => x.Content).HasMaxLength(2500);
+            entity.Property(x => x.NormalizedContent).HasMaxLength(2500);
+
+            entity.HasIndex(x => x.MessageId).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.CreatedAtUtc });
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+            entity.HasIndex(x => new { x.ProjectId, x.ChannelId, x.CreatedAtUtc });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProjectDailyDigest>(entity =>
+        {
+            entity.Property(x => x.Summary).HasMaxLength(2000);
+            entity.Property(x => x.KeywordsJson).HasMaxLength(1200);
+            entity.Property(x => x.ActiveChannelsJson).HasMaxLength(1200);
+            entity.Property(x => x.HighlightsJson).HasMaxLength(2000);
+
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate }).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.GeneratedAtUtc });
+
             entity.HasOne(x => x.Project)
                 .WithMany()
                 .HasForeignKey(x => x.ProjectId)

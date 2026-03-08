@@ -14,6 +14,7 @@ public sealed class Project
     public ulong? DailySummaryMessageId { get; set; }
 
     public DateTime? LastStandupDateLocal { get; set; }
+    public DateTime? LastLeadReportDateLocal { get; set; }
 
     public ICollection<Sprint> Sprints { get; set; } = new List<Sprint>();
     public ICollection<TaskItem> TaskItems { get; set; } = new List<TaskItem>();

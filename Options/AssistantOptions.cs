@@ -10,4 +10,8 @@ public sealed class AssistantOptions
     public int MaxRecentMessages { get; set; } = 12;
     public int MaxStandupDays { get; set; } = 3;
     public int MaxAttentionItems { get; set; } = 8;
+    public int MemoryLookbackDays { get; set; } = 30;
+    public int MemoryDigestDays { get; set; } = 7;
+    public int MaxRelevantMemoryMessages { get; set; } = 6;
+    public int MaxDailyMemoryDigests { get; set; } = 7;
 }

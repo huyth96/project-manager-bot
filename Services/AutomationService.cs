@@ -7,12 +7,14 @@ namespace ProjectManagerBot.Services;
 public sealed class AutomationService(
     IDbContextFactory<BotDbContext> dbContextFactory,
     ProjectService projectService,
+    ProjectDailyLeadReportService projectDailyLeadReportService,
     NotificationService notificationService,
     StudioTimeService studioTime,
     ILogger<AutomationService> logger) : BackgroundService
 {
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ProjectService _projectService = projectService;
+    private readonly ProjectDailyLeadReportService _projectDailyLeadReportService = projectDailyLeadReportService;
     private readonly NotificationService _notificationService = notificationService;
     private readonly StudioTimeService _studioTime = studioTime;
     private readonly ILogger<AutomationService> _logger = logger;
@@ -27,6 +29,7 @@ public sealed class AutomationService(
             try
             {
                 await TryRunStandupPromptAsync(stoppingToken);
+                await TryRunDailyLeadReportAsync(stoppingToken);
                 await TryRunOverdueTaskReminderAsync(stoppingToken);
                 await TryRunSprintAutoCloseAsync(stoppingToken);
                 await timer.WaitForNextTickAsync(stoppingToken);
@@ -210,6 +213,42 @@ public sealed class AutomationService(
                 sprint.Id,
                 sprint.ProjectId,
                 localNow);
+        }
+    }
+
+    private async Task TryRunDailyLeadReportAsync(CancellationToken cancellationToken)
+    {
+        var localNow = _studioTime.LocalNow;
+        if (localNow.Hour < 18)
+        {
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var projects = await db.Projects
+            .OrderBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        foreach (var project in projects)
+        {
+            if (project.LastLeadReportDateLocal?.Date == _studioTime.LocalDate.Date)
+            {
+                continue;
+            }
+
+            var sent = await _projectDailyLeadReportService.SendDailyLeadReportAsync(project.Id, cancellationToken);
+            if (!sent)
+            {
+                continue;
+            }
+
+            project.LastLeadReportDateLocal = _studioTime.LocalDate;
+            await db.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Đã gửi daily lead report cho dự án {ProjectId} vào {LocalDate}",
+                project.Id,
+                _studioTime.LocalDate);
         }
     }
 

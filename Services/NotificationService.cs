@@ -185,6 +185,37 @@ public sealed class NotificationService(
             cancellationToken);
     }
 
+    public async Task NotifyBugFixedAsync(
+        int projectId,
+        ulong actorDiscordId,
+        TaskItem bug,
+        CancellationToken cancellationToken = default)
+    {
+        await SendAsync(
+            projectId,
+            new EmbedBuilder()
+                .WithTitle("✅ Sứ Giả Báo Tin • Đóng Lỗi")
+                .WithColor(Color.Green)
+                .WithDescription(
+                    "🧯 Lỗi đã được xử lý\n" +
+                    $"📌 Lỗi #{bug.Id}\n" +
+                    $"- **Người cập nhật:** {FormatActor(actorDiscordId)}\n" +
+                    $"- **Tên:** **{bug.Title}**\n" +
+                    $"- **Trạng thái:** `{GetStatusLabel(bug.Status)}`\n" +
+                    $"- **Người xử lý:** {(bug.AssigneeId.HasValue ? $"<@{bug.AssigneeId.Value}>" : "`Chưa có`")}")
+                .WithCurrentTimestamp()
+                .Build(),
+            cancellationToken);
+    }
+
+    public async Task SendDailyLeadReportAsync(
+        int projectId,
+        Embed embed,
+        CancellationToken cancellationToken = default)
+    {
+        await SendAsync(projectId, embed, cancellationToken);
+    }
+
     private async Task SendAsync(int projectId, Embed embed, CancellationToken cancellationToken)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);

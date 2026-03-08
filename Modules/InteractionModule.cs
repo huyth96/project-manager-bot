@@ -1745,6 +1745,7 @@ public sealed class InteractionModule(
         }
 
         await _projectService.RefreshDashboardMessageAsync(bug.ProjectId);
+        await _notificationService.NotifyBugFixedAsync(bug.ProjectId, Context.User.Id, bug);
         await RespondAsync($"Đã đánh dấu lỗi đã sửa. XP +{xpAward} (Tổng: {totalXp}).", ephemeral: true);
     }
 
@@ -3139,12 +3140,14 @@ public sealed class ProjectCommandModule(
 [RequireContext(ContextType.Guild)]
 public sealed class TestCommandModule(
     ProjectService projectService,
+    ProjectDailyLeadReportService projectDailyLeadReportService,
     NotificationService notificationService,
     IDbContextFactory<BotDbContext> dbContextFactory) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
 
     private readonly ProjectService _projectService = projectService;
+    private readonly ProjectDailyLeadReportService _projectDailyLeadReportService = projectDailyLeadReportService;
     private readonly NotificationService _notificationService = notificationService;
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
 
@@ -3255,6 +3258,40 @@ public sealed class TestCommandModule(
 
         await FollowupAsync(
             $"Đã gửi nhắc quá hạn cho nhiệm vụ `#{task.Id}` tới {globalFeedText}.",
+            ephemeral: true);
+    }
+
+    [SlashCommand("daily-report", "Gửi báo cáo điều phối hằng ngày ngay để kiểm thử.")]
+    public async Task TestDailyLeadReportAsync(int? projectId = null)
+    {
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể chạy lệnh kiểm thử nhắc việc.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+
+        var project = await ResolveProjectAsync(projectId);
+        if (project is null)
+        {
+            await FollowupAsync("Không tìm thấy ngữ cảnh dự án.", ephemeral: true);
+            return;
+        }
+
+        var sent = await _projectDailyLeadReportService.SendDailyLeadReportAsync(project.Id);
+        if (!sent)
+        {
+            await FollowupAsync("Không thể dựng hoặc gửi daily lead report cho dự án hiện tại.", ephemeral: true);
+            return;
+        }
+
+        var targetChannelText = project.GlobalNotificationChannelId.HasValue
+            ? $"<#{project.GlobalNotificationChannelId.Value}>"
+            : "`task-feed của project`";
+
+        await FollowupAsync(
+            $"Đã gửi daily lead report cho dự án `{project.Name}` tại {targetChannelText}.",
             ephemeral: true);
     }
 

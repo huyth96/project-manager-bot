@@ -31,6 +31,7 @@ Bot hiện lấy context từ:
 - snapshot dự án hiện tại trong DB: sprint active, task, bug, backlog
 - standup gần đây
 - một phần recent messages của channel/thread đang hỏi
+- memory theo project: archive message, daily digest, và các dấu vết hội thoại lịch sử liên quan
 
 Để bật phần trả lời bằng LLM:
 
@@ -44,9 +45,25 @@ Ví dụ:
 @bot tiến độ sprint đang thế nào?
 @bot task nào cần xử lý ngay?
 @bot team đang tích cực hay tiêu cực?
+@bot tuần qua team đã bàn về vấn đề gì?
 ```
 
 Nếu chưa cấu hình `ASSISTANT_API_KEY`, bot vẫn trả lời theo snapshot hiện tại nhưng sẽ không diễn giải sâu bằng AI.
+
+## Daily Lead Report
+
+Bot sẽ tự gửi báo cáo điều phối hằng ngày cho từng project vào cuối ngày ở `task-feed` của project, tập trung vào:
+- sprint health và tiến độ
+- ai đã nộp / nộp trễ / chưa nộp standup
+- task rủi ro, task đình trệ, bug mở
+- biến động trong ngày
+- tín hiệu từ chat và action items cho lead
+
+Bạn có thể kiểm thử ngay bằng:
+
+```text
+/test daily-report
+```
 
 ## Theo Dõi Push Từ Repo Game (GitHub)
 

@@ -11,6 +11,7 @@ public sealed class DiscordBotService(
     DiscordSocketClient client,
     InteractionService interactionService,
     IServiceProvider serviceProvider,
+    ProjectMemoryService projectMemoryService,
     BotAssistantService botAssistantService,
     IOptions<DiscordBotOptions> options,
     ILogger<DiscordBotService> logger) : BackgroundService
@@ -18,6 +19,7 @@ public sealed class DiscordBotService(
     private readonly DiscordSocketClient _client = client;
     private readonly InteractionService _interactionService = interactionService;
     private readonly IServiceProvider _serviceProvider = serviceProvider;
+    private readonly ProjectMemoryService _projectMemoryService = projectMemoryService;
     private readonly BotAssistantService _botAssistantService = botAssistantService;
     private readonly DiscordBotOptions _options = options.Value;
     private readonly ILogger<DiscordBotService> _logger = logger;
@@ -114,6 +116,8 @@ public sealed class DiscordBotService(
 
     private async Task OnMessageReceivedAsync(SocketMessage socketMessage)
     {
+        await _projectMemoryService.ArchiveMessageAsync(socketMessage);
+
         if (socketMessage.Source != MessageSource.User)
         {
             return;

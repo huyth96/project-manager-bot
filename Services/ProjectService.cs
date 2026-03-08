@@ -87,12 +87,51 @@ public sealed class ProjectService(
         CancellationToken cancellationToken = default)
     {
         var project = await GetProjectByChannelAsync(channelId, cancellationToken);
-        if (project is not null || !parentChannelId.HasValue)
+        if (project is not null)
         {
             return project;
         }
 
-        return await GetProjectByChannelAsync(parentChannelId.Value, cancellationToken);
+        if (parentChannelId.HasValue)
+        {
+            project = await GetProjectByChannelAsync(parentChannelId.Value, cancellationToken);
+            if (project is not null)
+            {
+                return project;
+            }
+        }
+
+        var categoryId = ResolveCategoryId(channelId) ?? (parentChannelId.HasValue ? ResolveCategoryId(parentChannelId.Value) : null);
+        if (!categoryId.HasValue)
+        {
+            return null;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var projects = await db.Projects
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        return projects.FirstOrDefault(x => IsProjectInCategory(x, categoryId.Value));
+    }
+
+    private bool IsProjectInCategory(Project project, ulong categoryId)
+    {
+        return ResolveCategoryId(project.ChannelId) == categoryId ||
+               ResolveCategoryId(project.BugChannelId) == categoryId ||
+               ResolveCategoryId(project.StandupChannelId) == categoryId ||
+               (project.GitHubCommitsChannelId.HasValue && ResolveCategoryId(project.GitHubCommitsChannelId.Value) == categoryId) ||
+               (project.GlobalNotificationChannelId.HasValue && ResolveCategoryId(project.GlobalNotificationChannelId.Value) == categoryId);
+    }
+
+    private ulong? ResolveCategoryId(ulong channelId)
+    {
+        return _client.GetChannel(channelId) switch
+        {
+            SocketTextChannel textChannel => textChannel.CategoryId,
+            _ => null
+        };
     }
 
     public async Task SetGitHubCommitsChannelAsync(int projectId, ulong channelId, CancellationToken cancellationToken = default)

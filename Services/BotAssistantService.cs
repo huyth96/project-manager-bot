@@ -30,10 +30,10 @@ public sealed class BotAssistantService(
         string question,
         CancellationToken cancellationToken = default)
     {
-        var insight = await _projectInsightService.BuildContextAsync(message, cancellationToken);
+        var insight = await _projectInsightService.BuildContextAsync(message, question, cancellationToken);
         if (insight is null)
         {
-            return "Kênh này chưa gắn với dự án nào nên tôi chưa có dữ liệu sprint/task để trả lời. Hãy hỏi trong kênh project hoặc chạy `/project setup` trước.";
+            return "Kênh này chưa nằm trong project nào nên tôi chưa có ngữ cảnh sprint/task để trả lời. Hãy hỏi trong một kênh thuộc khu project hoặc chạy `/project setup` trước.";
         }
 
         if (string.IsNullOrWhiteSpace(question))
@@ -126,13 +126,13 @@ public sealed class BotAssistantService(
             return
                 $"Hiện chưa có sprint active cho dự án `{insight.Scope.ProjectName}`. " +
                 $"Backlog đang có `{insight.Sprint.ProjectBacklogCount}` task và `{insight.Sprint.OpenBugCount}` bug mở.\n" +
-                "Bạn có thể hỏi như: `@bot backlog hiện ra sao`, `@bot task nào cần ưu tiên`, `@bot khi nào nên bắt đầu sprint mới`.";
+                "Bạn có thể hỏi như: `@bot backlog hiện ra sao`, `@bot ai hay trễ hoặc chưa nộp báo cáo`, `@bot task nào có dấu hiệu đình trệ`, `@bot tuần qua team bàn gì`.";
         }
 
         return
             $"Sprint `{insight.Sprint.Name}` đang có `{insight.Sprint.DoneTasks}/{insight.Sprint.TotalTasks}` task done " +
             $"và `{insight.Sprint.DonePoints}/{Math.Max(insight.Sprint.TotalPoints, 0)}` points hoàn thành.\n" +
-            "Bạn có thể hỏi như: `@bot tiến độ sprint thế nào`, `@bot task nào cần xử lý ngay`, `@bot team đang tích cực hay tiêu cực`.";
+            "Bạn có thể hỏi như: `@bot tiến độ sprint thế nào`, `@bot ai hay trễ hoặc chưa nộp báo cáo`, `@bot task nào đang bị đình trệ`, `@bot tuần qua team bàn về vấn đề gì`.";
     }
 
     private string BuildFallbackResponse(
@@ -145,18 +145,37 @@ public sealed class BotAssistantService(
 
         if (!aiAvailable)
         {
-            builder.AppendLine("Assistant AI chưa được cấu hình, nên tôi đang trả lời theo snapshot hiện tại.");
+            builder.AppendLine("Assistant AI chưa được cấu hình, nên tôi đang trả lời theo dữ liệu project hiện có.");
             builder.AppendLine();
         }
         else
         {
-            builder.AppendLine("Tôi tạm trả lời theo snapshot hiện tại vì service AI chưa phản hồi được.");
+            builder.AppendLine("Tôi tạm trả lời theo dữ liệu project hiện có vì service AI chưa phản hồi được.");
             builder.AppendLine();
         }
 
         AppendSprintSummary(builder, insight);
 
-        if (ContainsAny(lowerQuestion, "task", "xử lý", "xu ly", "ưu tiên", "uu tien", "cần làm", "can lam", "bug"))
+        if (ContainsAny(lowerQuestion, "trễ báo cáo", "tre bao cao", "báo cáo", "bao cao", "standup"))
+        {
+            AppendLateReporters(builder, insight);
+            AppendMissingReporters(builder, insight);
+        }
+        else if (ContainsAny(lowerQuestion, "không nộp", "khong nop", "chưa nộp", "chua nop", "missing report", "miss standup"))
+        {
+            AppendMissingReporters(builder, insight);
+            AppendLateReporters(builder, insight, maxItems: 2);
+        }
+        else if (ContainsAny(lowerQuestion, "đình trệ", "dinh tre", "stalled", "kẹt", "ket", "tắc", "tac"))
+        {
+            AppendStalledTasks(builder, insight);
+        }
+        else if (ContainsAny(lowerQuestion, "tuần qua", "tuan qua", "gần đây", "gan day", "đã bàn", "da ban", "thảo luận", "thao luan", "lịch sử", "lich su", "nhắc lại", "nho lai", "vấn đề gì", "van de gi"))
+        {
+            AppendMemoryOverview(builder, insight);
+            AppendRelevantMessages(builder, insight);
+        }
+        else if (ContainsAny(lowerQuestion, "task", "xử lý", "xu ly", "ưu tiên", "uu tien", "cần làm", "can lam", "bug"))
         {
             AppendAttentionItems(builder, insight);
         }
@@ -165,15 +184,18 @@ public sealed class BotAssistantService(
             AppendHealthSummary(builder, insight);
             AppendAttentionItems(builder, insight, maxItems: 3);
         }
-        else if (ContainsAny(lowerQuestion, "point", "điểm", "uớc lượng", "ước lượng", "estimate"))
+        else if (ContainsAny(lowerQuestion, "point", "điểm", "ước lượng", "uoc luong", "estimate"))
         {
             builder.AppendLine();
             builder.Append("Để gợi ý điểm tốt hơn, hãy gửi rõ tên task, mô tả, độ phức tạp kỹ thuật, dependency và phạm vi UI/API. ");
-            builder.Append("Khi có API key cho assistant, bot sẽ diễn giải estimate tự nhiên hơn.");
+            builder.Append("Khi có AI ổn định, bot sẽ diễn giải estimate tự nhiên hơn.");
         }
         else
         {
             AppendHealthSummary(builder, insight);
+            AppendLateReporters(builder, insight, maxItems: 2);
+            AppendMissingReporters(builder, insight, maxItems: 2);
+            AppendStalledTasks(builder, insight, maxItems: 2);
             AppendAttentionItems(builder, insight, maxItems: 3);
         }
 
@@ -219,13 +241,179 @@ public sealed class BotAssistantService(
         }
     }
 
+    private static void AppendLateReporters(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 3)
+    {
+        var lateReporters = insight.StandupDiscipline.LateReporters
+            .Where(x => x.LateReports > 0)
+            .Take(Math.Max(1, maxItems))
+            .ToList();
+
+        builder.AppendLine();
+        if (lateReporters.Count == 0)
+        {
+            builder.AppendLine($"Trong {insight.StandupDiscipline.LookbackDays} ngày gần đây, chưa thấy ai có báo cáo nộp sau `{insight.StandupDiscipline.DueTimeLocal:hh\\:mm}`.");
+            return;
+        }
+
+        builder.AppendLine($"Người hay trễ báo cáo trong {insight.StandupDiscipline.LookbackDays} ngày gần đây:");
+        foreach (var reporter in lateReporters)
+        {
+            var avgLateText = reporter.AverageLateMinutes.HasValue ? $" | trễ TB {reporter.AverageLateMinutes.Value} phút" : string.Empty;
+            builder.AppendLine($"- <@{reporter.DiscordUserId}>: trễ `{reporter.LateReports}/{reporter.TotalReports}` lần ({reporter.LateRatePercent}%){avgLateText}");
+        }
+    }
+
+    private static void AppendMissingReporters(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 3)
+    {
+        var missingReporters = insight.StandupDiscipline.MissingReporters
+            .Take(Math.Max(1, maxItems))
+            .ToList();
+
+        builder.AppendLine();
+        if (insight.StandupDiscipline.ExpectedReporterCount == 0)
+        {
+            builder.AppendLine("Chưa đủ dữ liệu để suy ra ai là người bắt buộc phải nộp standup.");
+            return;
+        }
+
+        if (missingReporters.Count == 0)
+        {
+            builder.AppendLine($"Chưa thấy ai bị thiếu báo cáo trong nhóm `{insight.StandupDiscipline.ExpectedReporterCount}` người đang được theo dõi.");
+            return;
+        }
+
+        builder.AppendLine($"Người đang thiếu báo cáo trong nhóm `{insight.StandupDiscipline.ExpectedReporterCount}` người được theo dõi:");
+        foreach (var reporter in missingReporters)
+        {
+            var lastMissing = reporter.LastMissingDate.HasValue ? $" | lần gần nhất {reporter.LastMissingDate:yyyy-MM-dd}" : string.Empty;
+            var missingToday = reporter.MissingToday ? " | thiếu hôm nay" : string.Empty;
+            builder.AppendLine(
+                $"- <@{reporter.DiscordUserId}>: thiếu `{reporter.MissingDays}` ngày, đã nộp `{reporter.SubmittedDays}` ngày | {reporter.BasisSummary}{lastMissing}{missingToday}");
+        }
+
+        builder.AppendLine("Lưu ý: danh sách này là heuristic dựa trên task đang mở, lịch sử standup và mức hoạt động gần đây trong project.");
+    }
+
+    private static void AppendStalledTasks(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 5)
+    {
+        var stalledTasks = insight.StalledTasks.Take(Math.Max(1, maxItems)).ToList();
+
+        builder.AppendLine();
+        if (stalledTasks.Count == 0)
+        {
+            builder.AppendLine("Hiện chưa thấy task nào có dấu hiệu đình trệ theo rule hiện tại.");
+            return;
+        }
+
+        builder.AppendLine("Task có dấu hiệu đình trệ:");
+        foreach (var task in stalledTasks)
+        {
+            var owner = task.AssigneeId.HasValue ? $" | owner <@{task.AssigneeId.Value}>" : string.Empty;
+            builder.AppendLine(
+                $"- #{task.TaskId} {task.Title}: {task.Reason} | trạng thái `{task.Status}` | tuổi `{task.AgeDays}` ngày | {task.Points}đ{owner}");
+        }
+    }
+
+    private static void AppendMemoryOverview(
+        StringBuilder builder,
+        ProjectAssistantContext insight,
+        int maxDays = 4,
+        bool includeDailyBullets = true)
+    {
+        builder.AppendLine();
+
+        if (insight.Memory.ArchivedMessageCount == 0)
+        {
+            builder.AppendLine("Bộ nhớ dài hạn của project chưa có message archive nào.");
+            return;
+        }
+
+        var coverageStart = insight.Memory.OldestLocalDate?.ToString("yyyy-MM-dd") ?? "không rõ";
+        var coverageEnd = insight.Memory.LatestLocalDate?.ToString("yyyy-MM-dd") ?? "không rõ";
+        builder.AppendLine($"Bộ nhớ hiện có `{insight.Memory.ArchivedMessageCount}` tin nhắn archived từ `{coverageStart}` đến `{coverageEnd}`.");
+
+        var digests = insight.Memory.DailyDigests
+            .Take(Math.Max(1, maxDays))
+            .ToList();
+
+        if (digests.Count == 0)
+        {
+            builder.AppendLine("Chưa có daily digest nào để tóm tắt lịch sử thảo luận.");
+            return;
+        }
+
+        var topTopics = digests
+            .SelectMany(x => x.TopKeywords)
+            .GroupBy(x => x)
+            .OrderByDescending(x => x.Count())
+            .ThenBy(x => x.Key, StringComparer.Ordinal)
+            .Take(5)
+            .Select(x => x.Key)
+            .ToList();
+
+        var topChannels = digests
+            .SelectMany(x => x.ActiveChannels)
+            .GroupBy(x => x)
+            .OrderByDescending(x => x.Count())
+            .ThenBy(x => x.Key, StringComparer.Ordinal)
+            .Take(3)
+            .Select(x => x.Key)
+            .ToList();
+
+        if (topTopics.Count > 0)
+        {
+            builder.AppendLine($"Trong {digests.Count} ngày gần đây, team bàn nhiều về: {string.Join(", ", topTopics)}.");
+        }
+
+        if (topChannels.Count > 0)
+        {
+            builder.AppendLine($"Hoạt động nổi bật ở: {string.Join(", ", topChannels)}.");
+        }
+
+        if (!includeDailyBullets)
+        {
+            return;
+        }
+
+        builder.AppendLine("Tóm tắt theo ngày:");
+        foreach (var digest in digests.Take(3))
+        {
+            builder.AppendLine($"- {digest.Date:yyyy-MM-dd}: {digest.Summary}");
+        }
+    }
+
+    private static void AppendRelevantMessages(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var relevantMessages = insight.Memory.RelevantMessages
+            .Take(Math.Max(1, maxItems))
+            .ToList();
+
+        builder.AppendLine();
+        if (relevantMessages.Count == 0)
+        {
+            builder.AppendLine("Chưa tìm thấy dấu vết hội thoại lịch sử nào thật sự liên quan.");
+            return;
+        }
+
+        builder.AppendLine("Dấu vết liên quan trong memory:");
+        foreach (var message in relevantMessages)
+        {
+            var location = string.IsNullOrWhiteSpace(message.ThreadName)
+                ? $"#{message.ChannelName}"
+                : $"#{message.ChannelName}/{message.ThreadName}";
+
+            builder.AppendLine(
+                $"- {message.TimestampLocal:MM-dd HH:mm} | {location} | {message.AuthorName}: {Truncate(message.Content, 120)}");
+        }
+    }
+
     private static void AppendAttentionItems(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 5)
     {
         var items = insight.AttentionItems.Take(Math.Max(1, maxItems)).ToList();
         if (items.Count == 0)
         {
             builder.AppendLine();
-            builder.Append("Hiện chưa thấy mục nào nổi bật cần escalte ngay trong snapshot.");
+            builder.Append("Hiện chưa thấy mục nào nổi bật cần escalate ngay trong snapshot.");
             return;
         }
 
@@ -246,8 +434,14 @@ public sealed class BotAssistantService(
             "Always answer in Vietnamese. " +
             "Use only the provided context. If the data is missing, say that clearly instead of guessing. " +
             "Be concise, natural, and actionable. " +
+            "The project context is project-wide, not limited to the current channel, as long as the current channel belongs to that project. " +
+            "The memory section contains archived project messages, daily digests, and relevant historical traces. " +
             "For progress questions, cite the important metrics. " +
-            "For prioritization questions, focus on blockers, overdue work, unassigned work, open bugs, and high-point unfinished tasks. " +
+            "For prioritization questions, focus on blockers, overdue work, stalled tasks, unassigned work, open bugs, and high-point unfinished tasks. " +
+            "For late or missing standup questions, use the standupDiscipline summary and do not invent missing reports that are not in the data. " +
+            "Missing reporters are inferred heuristically from open task assignees, recent standup reporters, and repeated recent project participants. " +
+            "For stalled task questions, use the stalledTasks list and mention that the heuristic is based on task age and current status because there is no status-change history yet. " +
+            "For weekly discussion or history questions, rely on the daily digests first, then use relevant historical messages as evidence. " +
             "For story point questions, provide an estimate with rationale and uncertainty. " +
             "Do not claim you searched the whole Discord if the context only contains summaries or recent messages.";
     }
