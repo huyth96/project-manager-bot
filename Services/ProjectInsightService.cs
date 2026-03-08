@@ -104,10 +104,11 @@ public sealed class ProjectInsightService(
             .AsNoTracking()
             .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate)
             .OrderByDescending(x => x.LocalDate)
-            .ThenBy(x => x.DiscordUserId)
             .ToListAsync(cancellationToken);
 
         return reports
+            .OrderByDescending(x => x.LocalDate)
+            .ThenBy(x => x.DiscordUserId)
             .Select(x => new AssistantStandupEntry(
                 Date: x.LocalDate,
                 DiscordUserId: x.DiscordUserId,
