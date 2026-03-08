@@ -76,7 +76,8 @@ public sealed class ProjectService(
                 x => x.ChannelId == channelId ||
                      x.BugChannelId == channelId ||
                      x.StandupChannelId == channelId ||
-                     x.GitHubCommitsChannelId == channelId,
+                     x.GitHubCommitsChannelId == channelId ||
+                     x.GlobalNotificationChannelId == channelId,
                 cancellationToken);
     }
 

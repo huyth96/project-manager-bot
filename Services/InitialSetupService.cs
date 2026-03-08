@@ -16,6 +16,10 @@ public sealed class InitialSetupService(
     private const string OnboardingChannelName = "\U0001F9ED-onboarding";
     private const string WikiChannelName = "\U0001F4D8-wiki";
     private const string ShopChannelName = "\U0001F6D2-shop";
+    private const string P1DailyStandupChannelName = "\U0001F4DD-p1-daily-standup";
+    private const string P1TaskFeedChannelName = "\U0001F4E2-p1-task-feed";
+    private const string LegacyDailyStandupChannelName = "\U0001F4DD-daily-standup";
+    private const string LegacyGlobalTaskFeedChannelName = "\U0001F4E2-global-task-feed";
     private const string RoleSelectionEmbedTitle = "\U0001F3AD Chọn Vai Trò";
     private const string OnboardingEmbedTitle = "\U0001F9ED Hướng Dẫn Bắt Đầu";
     private const string WikiEmbedTitle = "\U0001F4D8 Tài Liệu Dự Án A";
@@ -128,9 +132,13 @@ public sealed class InitialSetupService(
 
         var dailyStandup = await EnsureTextChannelAsync(
             guild,
-            botZone.Id,
-            "\U0001F4DD-daily-standup",
-            "Nơi bot nhắc và tổng hợp báo cáo hằng ngày.");
+            projectHall.Id,
+            P1DailyStandupChannelName,
+            "Nơi bot nhắc và tổng hợp báo cáo hằng ngày của Project A.",
+            legacyNames:
+            [
+                LegacyDailyStandupChannelName
+            ]);
         var githubCommits = await EnsureTextChannelAsync(
             guild,
             botZone.Id,
@@ -143,9 +151,13 @@ public sealed class InitialSetupService(
             "Nhật ký lệnh bot, dành cho admin và Studio Lead.");
         var globalTaskFeed = await EnsureTextChannelAsync(
             guild,
-            botZone.Id,
-            "\U0001F4E2-global-task-feed",
-            "Thông báo task toàn cục: quá hạn, cập nhật quan trọng.");
+            projectHall.Id,
+            P1TaskFeedChannelName,
+            "Thông báo task của Project A: quá hạn, cập nhật quan trọng.",
+            legacyNames:
+            [
+                LegacyGlobalTaskFeedChannelName
+            ]);
 
         var dailyScrum = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F399\uFE0F Daily Scrum");
         var coWorking = await EnsureVoiceChannelAsync(guild, meetingHall.Id, "\U0001F3A7 Co-working");
@@ -340,7 +352,8 @@ public sealed class InitialSetupService(
         SocketGuild guild,
         ulong categoryId,
         string name,
-        string? topic = null)
+        string? topic = null,
+        IReadOnlyCollection<string>? legacyNames = null)
     {
         var existing = guild.TextChannels.FirstOrDefault(
             x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.CategoryId == categoryId);
@@ -355,6 +368,23 @@ public sealed class InitialSetupService(
             }
 
             return existing;
+        }
+
+        if (legacyNames is not null)
+        {
+            var migrated = guild.TextChannels.FirstOrDefault(x =>
+                legacyNames.Any(alias => x.Name.Equals(alias, StringComparison.OrdinalIgnoreCase)));
+            if (migrated is not null)
+            {
+                await migrated.ModifyAsync(props =>
+                {
+                    props.CategoryId = categoryId;
+                    props.Name = name;
+                    props.Topic = topic;
+                });
+
+                return migrated;
+            }
         }
 
         return await guild.CreateTextChannelAsync(name, props =>
@@ -893,13 +923,13 @@ public sealed class InitialSetupService(
                 $"- <#{projectGeneralChannel.Id}>: Trao đổi công việc chung\n" +
                 $"- <#{artShowcaseChannel.Id}>: Showcase art và góp ý\n" +
                 $"- <#{devTalkChannel.Id}>: Trao đổi kỹ thuật\n" +
-                $"- <#{bugsChannel.Id}>: Theo dõi và xử lý bug",
+                $"- <#{bugsChannel.Id}>: Theo dõi và xử lý bug\n" +
+                $"- <#{standupChannel.Id}>: Báo cáo hằng ngày của team\n" +
+                $"- <#{globalTaskFeedChannel.Id}>: Feed cảnh báo và cập nhật task của dự án",
                 false)
             .AddField(
                 "Bot Zone",
-                $"- <#{standupChannel.Id}>: Báo cáo hằng ngày\n" +
-                $"- <#{githubCommitsChannel.Id}>: Log commit GitHub\n" +
-                $"- <#{globalTaskFeedChannel.Id}>: Thông báo task toàn cục",
+                $"- <#{githubCommitsChannel.Id}>: Log commit GitHub và tín hiệu automation",
                 false)
             .Build();
 

@@ -2860,14 +2860,33 @@ public sealed class ProjectCommandModule(
 
         await DeferAsync(ephemeral: true);
 
+        ulong? currentCategoryId = null;
+        if (Context.Channel is SocketTextChannel currentTextChannel)
+        {
+            currentCategoryId = currentTextChannel.CategoryId;
+        }
         var bugChannel = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Contains("bugs", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x =>
+                x.CategoryId == currentCategoryId &&
+                x.Name.Contains("bugs", StringComparison.OrdinalIgnoreCase))
+            ?? Context.Guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains("bugs", StringComparison.OrdinalIgnoreCase));
         var standupChannel = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Contains("daily-standup", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x =>
+                x.CategoryId == currentCategoryId &&
+                x.Name.Contains("daily-standup", StringComparison.OrdinalIgnoreCase))
+            ?? Context.Guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains("daily-standup", StringComparison.OrdinalIgnoreCase));
         var githubCommitsChannel = Context.Guild.TextChannels
             .FirstOrDefault(x => x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
         var globalTaskFeed = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x =>
+                x.CategoryId == currentCategoryId &&
+                (x.Name.Contains("task-feed", StringComparison.OrdinalIgnoreCase) ||
+                 x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase)))
+            ?? Context.Guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains("task-feed", StringComparison.OrdinalIgnoreCase) ||
+                x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase));
 
         var project = await _projectService.UpsertProjectAsync(
             name: name.Trim(),

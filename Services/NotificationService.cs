@@ -11,7 +11,7 @@ public sealed class NotificationService(
     DiscordSocketClient client,
     ILogger<NotificationService> logger)
 {
-    private const string GlobalTaskFeedChannelName = "global-task-feed";
+    private const string GlobalTaskFeedChannelName = "task-feed";
 
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly DiscordSocketClient _client = client;
@@ -233,11 +233,22 @@ public sealed class NotificationService(
             return null;
         }
 
+        ulong? projectCategoryId = null;
+        if (_client.GetChannel(project.ChannelId) is SocketTextChannel projectTextChannel)
+        {
+            projectCategoryId = projectTextChannel.CategoryId;
+        }
+
         var discovered = guild.TextChannels.FirstOrDefault(x =>
-            x.Name.Equals(GlobalTaskFeedChannelName, StringComparison.OrdinalIgnoreCase))
+                x.CategoryId == projectCategoryId &&
+                x.Name.Contains(GlobalTaskFeedChannelName, StringComparison.OrdinalIgnoreCase))
             ?? guild.TextChannels.FirstOrDefault(x =>
-                x.Name.Contains("global", StringComparison.OrdinalIgnoreCase) &&
-                x.Name.Contains("task", StringComparison.OrdinalIgnoreCase));
+                x.CategoryId == projectCategoryId &&
+                x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase))
+            ?? guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains(GlobalTaskFeedChannelName, StringComparison.OrdinalIgnoreCase))
+            ?? guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains("global-task-feed", StringComparison.OrdinalIgnoreCase));
 
         if (discovered is null)
         {
