@@ -24,43 +24,57 @@ public sealed class ProjectDailyLeadReportService(
 
     public async Task<bool> SendDailyLeadReportAsync(int projectId, CancellationToken cancellationToken = default)
     {
-        var embed = await BuildDailyLeadReportEmbedAsync(projectId, cancellationToken);
-        if (embed is null)
+        try
         {
+            var embed = await BuildDailyLeadReportEmbedAsync(projectId, cancellationToken);
+            if (embed is null)
+            {
+                return false;
+            }
+
+            await _notificationService.SendDailyLeadReportAsync(projectId, embed, cancellationToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Không thể gửi daily lead report cho project {ProjectId}", projectId);
             return false;
         }
-
-        await _notificationService.SendDailyLeadReportAsync(projectId, embed, cancellationToken);
-        return true;
     }
 
     public async Task<Embed?> BuildDailyLeadReportEmbedAsync(
         int projectId,
         CancellationToken cancellationToken = default)
     {
-        var context = await _projectInsightService.BuildProjectContextAsync(
-            projectId,
-            question: "bao cao dieu phoi hang ngay",
-            cancellationToken);
-
-        if (context is null)
-        {
-            return null;
-        }
-
         try
         {
+            var context = await _projectInsightService.BuildProjectContextAsync(
+                projectId,
+                question: "bao cao dieu phoi hang ngay",
+                cancellationToken);
+
+            if (context is null)
+            {
+                return null;
+            }
+
             await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-            var (startUtc, endUtc) = BuildUtcRangeForLocalDate(_studioTime.LocalDate);
-            var createdToday = await db.TaskItems
+            var recentProjectTasks = await db.TaskItems
                 .AsNoTracking()
-                .Where(x =>
-                    x.ProjectId == projectId &&
-                    x.CreatedAtUtc >= startUtc &&
-                    x.CreatedAtUtc < endUtc)
+                .Where(x => x.ProjectId == projectId)
                 .OrderByDescending(x => x.Id)
+                .Take(500)
                 .ToListAsync(cancellationToken);
+
+            var createdToday = recentProjectTasks
+                .Where(x => TimeZoneInfo.ConvertTime(x.CreatedAtUtc, _studioTime.TimeZone).Date == _studioTime.LocalDate.Date)
+                .OrderByDescending(x => x.Id)
+                .ToList();
 
             var todayMemoryMessages = await db.ProjectMemoryMessages
                 .AsNoTracking()
@@ -360,19 +374,6 @@ public sealed class ProjectDailyLeadReportService(
             "negative" => Color.Orange,
             _ => Color.Blue
         };
-    }
-
-    private DateTimeOffset BuildUtcStart(DateTime localDate)
-    {
-        var localStart = new DateTime(localDate.Year, localDate.Month, localDate.Day, 0, 0, 0, DateTimeKind.Unspecified);
-        return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(localStart, _studioTime.TimeZone));
-    }
-
-    private (DateTimeOffset StartUtc, DateTimeOffset EndUtc) BuildUtcRangeForLocalDate(DateTime localDate)
-    {
-        var startUtc = BuildUtcStart(localDate);
-        var endUtc = BuildUtcStart(localDate.AddDays(1));
-        return (startUtc, endUtc);
     }
 
     private static string JoinBulletLines(IReadOnlyList<string> lines, int maxLength = 1000)
