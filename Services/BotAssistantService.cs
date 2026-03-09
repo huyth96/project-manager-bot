@@ -41,14 +41,20 @@ public sealed class BotAssistantService(
             return BuildHelpResponse(insight);
         }
 
+        var intent = ClassifyIntent(question);
+        if (intent == AssistantIntent.Greeting)
+        {
+            return BuildHelpResponse(insight);
+        }
+
         if (!_options.Enabled || string.IsNullOrWhiteSpace(_options.ApiKey))
         {
-            return ClampForDiscord(BuildFallbackResponse(question, insight, aiAvailable: false));
+            return ClampForDiscord(BuildFallbackResponse(question, insight, aiAvailable: false, intent));
         }
 
         try
         {
-            var aiReply = await GenerateAiReplyAsync(question, insight, cancellationToken);
+            var aiReply = await GenerateAiReplyAsync(question, insight, intent, cancellationToken);
             if (!string.IsNullOrWhiteSpace(aiReply))
             {
                 return ClampForDiscord(aiReply.Trim());
@@ -63,15 +69,17 @@ public sealed class BotAssistantService(
             _logger.LogWarning(ex, "Assistant AI failed for channel {ChannelId}", message.Channel.Id);
         }
 
-        return ClampForDiscord(BuildFallbackResponse(question, insight, aiAvailable: true));
+        return ClampForDiscord(BuildFallbackResponse(question, insight, aiAvailable: true, intent));
     }
 
     private async Task<string?> GenerateAiReplyAsync(
         string question,
         ProjectAssistantContext insight,
+        AssistantIntent intent,
         CancellationToken cancellationToken)
     {
         var endpoint = BuildChatCompletionsEndpoint(_options.BaseUrl);
+        var contextEnvelope = BuildAiContextEnvelope(insight, intent);
         var payload = new
         {
             model = _options.Model,
@@ -86,7 +94,12 @@ public sealed class BotAssistantService(
                 new
                 {
                     role = "system",
-                    content = "Structured project context JSON:\n" + JsonSerializer.Serialize(insight, JsonOptions)
+                    content = BuildIntentGuidance(intent)
+                },
+                new
+                {
+                    role = "system",
+                    content = "Structured project context JSON:\n" + JsonSerializer.Serialize(contextEnvelope, JsonOptions)
                 },
                 new
                 {
@@ -138,6 +151,96 @@ public sealed class BotAssistantService(
     private string BuildFallbackResponse(
         string question,
         ProjectAssistantContext insight,
+        bool aiAvailable,
+        AssistantIntent intent)
+    {
+        var builder = new StringBuilder();
+
+        if (!aiAvailable)
+        {
+            builder.AppendLine("Assistant AI chua duoc cau hinh, nen toi dang tra loi theo du lieu project hien co.");
+            builder.AppendLine();
+        }
+        else
+        {
+            builder.AppendLine("Toi tam tra loi theo du lieu project hien co vi service AI chua phan hoi duoc.");
+            builder.AppendLine();
+        }
+
+        AppendSprintSummary(builder, insight);
+
+        switch (intent)
+        {
+            case AssistantIntent.StandupDiscipline:
+                AppendLateReporters(builder, insight);
+                AppendMissingReporters(builder, insight);
+                AppendMemberSignals(builder, insight, maxItems: 3);
+                break;
+
+            case AssistantIntent.MemberInsights:
+                AppendMemberProfiles(builder, insight);
+                AppendMemberSignals(builder, insight);
+                AppendMemberWorkloads(builder, insight, maxItems: 3);
+                break;
+
+            case AssistantIntent.DecisionHistory:
+                AppendDecisionSummary(builder, insight);
+                AppendTopicSummary(builder, insight, maxItems: 3);
+                AppendRelevantMessages(builder, insight, maxItems: 2);
+                break;
+
+            case AssistantIntent.TopicHistory:
+                AppendTaskFlowSummary(builder, insight);
+                AppendTopicSummary(builder, insight);
+                AppendDecisionSummary(builder, insight, maxItems: 3);
+                AppendRiskSummary(builder, insight, maxItems: 3);
+                AppendMemoryOverview(builder, insight);
+                AppendRelevantMessages(builder, insight);
+                break;
+
+            case AssistantIntent.RiskReview:
+                AppendRiskSummary(builder, insight);
+                AppendTrendSummary(builder, insight);
+                AppendAttentionItems(builder, insight, maxItems: 3);
+                break;
+
+            case AssistantIntent.TaskExecution:
+                AppendTaskFlowSummary(builder, insight);
+                AppendStalledTasks(builder, insight);
+                AppendAttentionItems(builder, insight);
+                break;
+
+            case AssistantIntent.ProgressReview:
+                AppendHealthSummary(builder, insight);
+                AppendTrendSummary(builder, insight);
+                AppendAttentionItems(builder, insight, maxItems: 3);
+                break;
+
+            case AssistantIntent.Estimation:
+                builder.AppendLine();
+                builder.Append("De goi y diem tot hon, hay gui ro ten task, mo ta, do phuc tap ky thuat, dependency va pham vi UI/API. ");
+                builder.Append("Khi co AI on dinh, bot se dien giai estimate tu nhien hon.");
+                break;
+
+            default:
+                AppendHealthSummary(builder, insight);
+                AppendTaskFlowSummary(builder, insight);
+                AppendLateReporters(builder, insight, maxItems: 2);
+                AppendMissingReporters(builder, insight, maxItems: 2);
+                AppendStalledTasks(builder, insight, maxItems: 2);
+                AppendMemberWorkloads(builder, insight, maxItems: 2);
+                AppendTopicSummary(builder, insight, maxItems: 2);
+                AppendRiskSummary(builder, insight, maxItems: 2);
+                AppendAttentionItems(builder, insight, maxItems: 3);
+                break;
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private string BuildFallbackResponse(
+        string question,
+        ProjectAssistantContext insight,
         bool aiAvailable)
     {
         var lowerQuestion = question.Trim().ToLowerInvariant();
@@ -170,8 +273,41 @@ public sealed class BotAssistantService(
         {
             AppendStalledTasks(builder, insight);
         }
+        else if (ContainsAny(lowerQuestion, "member", "thanh vien", "qua tai", "phu hop", "ai dang qua tai", "ai hop", "ai hop task"))
+        {
+            AppendMemberProfiles(builder, insight);
+            AppendMemberSignals(builder, insight);
+            AppendMemberWorkloads(builder, insight, maxItems: 3);
+        }
+        else if (ContainsAny(lowerQuestion, "workload", "qua tai", "dang giu", "ai dang lam nhieu", "ai lam nhieu", "ganh"))
+        {
+            AppendMemberWorkloads(builder, insight);
+            AppendTaskFlowSummary(builder, insight);
+            AppendMemberProfiles(builder, insight, maxItems: 3);
+        }
+        else if (ContainsAny(lowerQuestion, "quyet dinh", "decision", "chot gi", "chot", "thong nhat"))
+        {
+            AppendDecisionSummary(builder, insight);
+            AppendTopicSummary(builder, insight, maxItems: 3);
+        }
+        else if (ContainsAny(lowerQuestion, "rui ro", "risk", "lech", "tre", "cham", "van de nong", "hot issue"))
+        {
+            AppendRiskSummary(builder, insight);
+            AppendTrendSummary(builder, insight);
+            AppendAttentionItems(builder, insight, maxItems: 3);
+        }
+        else if (ContainsAny(lowerQuestion, "chu de", "topic", "ban nhieu", "nhac nhieu", "hot topic"))
+        {
+            AppendTopicSummary(builder, insight);
+            AppendDecisionSummary(builder, insight, maxItems: 2);
+            AppendRelevantMessages(builder, insight, maxItems: 2);
+        }
         else if (ContainsAny(lowerQuestion, "tuần qua", "tuan qua", "gần đây", "gan day", "đã bàn", "da ban", "thảo luận", "thao luan", "lịch sử", "lich su", "nhắc lại", "nho lai", "vấn đề gì", "van de gi"))
         {
+            AppendTaskFlowSummary(builder, insight);
+            AppendTopicSummary(builder, insight);
+            AppendDecisionSummary(builder, insight, maxItems: 3);
+            AppendRiskSummary(builder, insight, maxItems: 3);
             AppendMemoryOverview(builder, insight);
             AppendRelevantMessages(builder, insight);
         }
@@ -182,6 +318,7 @@ public sealed class BotAssistantService(
         else if (ContainsAny(lowerQuestion, "tích cực", "tich cuc", "tiêu cực", "tieu cuc", "tiến độ", "tien do", "sprint", "health"))
         {
             AppendHealthSummary(builder, insight);
+            AppendTrendSummary(builder, insight);
             AppendAttentionItems(builder, insight, maxItems: 3);
         }
         else if (ContainsAny(lowerQuestion, "point", "điểm", "ước lượng", "uoc luong", "estimate"))
@@ -193,9 +330,13 @@ public sealed class BotAssistantService(
         else
         {
             AppendHealthSummary(builder, insight);
+            AppendTaskFlowSummary(builder, insight);
             AppendLateReporters(builder, insight, maxItems: 2);
             AppendMissingReporters(builder, insight, maxItems: 2);
             AppendStalledTasks(builder, insight, maxItems: 2);
+            AppendMemberWorkloads(builder, insight, maxItems: 2);
+            AppendTopicSummary(builder, insight, maxItems: 2);
+            AppendRiskSummary(builder, insight, maxItems: 2);
             AppendAttentionItems(builder, insight, maxItems: 3);
         }
 
@@ -238,6 +379,29 @@ public sealed class BotAssistantService(
         if (blockerCount > 0)
         {
             builder.AppendLine($"Standup gần đây có `{blockerCount}` báo cáo blocker.");
+        }
+    }
+
+    private static void AppendTaskFlowSummary(StringBuilder builder, ProjectAssistantContext insight)
+    {
+        builder.AppendLine();
+        builder.AppendLine(
+            $"Trong {insight.TaskFlow.LookbackDays} ngÃ y gáº§n Ä‘Ã¢y cÃ³ `{insight.TaskFlow.TotalEvents}` task event: " +
+            $"táº¡o `{insight.TaskFlow.CreatedTasks}` task, hoÃ n thÃ nh `{insight.TaskFlow.CompletedTasks}` task, " +
+            $"má»Ÿ `{insight.TaskFlow.CreatedBugs}` bug, Ä‘Ã³ng `{insight.TaskFlow.FixedBugs}` bug, tráº£ vá» backlog `{insight.TaskFlow.ReturnedToBacklog}` task.");
+
+        var topActors = insight.TaskFlow.TopActors.Take(3).ToList();
+        if (topActors.Count == 0)
+        {
+            builder.AppendLine("ChÆ°a cÃ³ dá»¯ liá»‡u thao tÃ¡c task Ä‘á»§ Ä‘á»ƒ suy ra ai Ä‘ang hoáº¡t Ä‘á»™ng nhiá»u.");
+            return;
+        }
+
+        builder.AppendLine("NgÆ°á»i cÃ³ nhiá»u thay Ä‘á»•i task/bug nháº¥t gáº§n Ä‘Ã¢y:");
+        foreach (var actor in topActors)
+        {
+            builder.AppendLine(
+                $"- <@{actor.DiscordUserId}>: `{actor.EventCount}` event | done `{actor.CompletedTasks}` task | fix `{actor.FixedBugs}` bug | nháº­n/giao `{actor.ClaimedOrAssignedTasks}` láº§n");
         }
     }
 
@@ -311,6 +475,25 @@ public sealed class BotAssistantService(
             var owner = task.AssigneeId.HasValue ? $" | owner <@{task.AssigneeId.Value}>" : string.Empty;
             builder.AppendLine(
                 $"- #{task.TaskId} {task.Title}: {task.Reason} | trạng thái `{task.Status}` | tuổi `{task.AgeDays}` ngày | {task.Points}đ{owner}");
+        }
+    }
+
+    private static void AppendMemberWorkloads(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var workloads = insight.MemberWorkloads.Take(Math.Max(1, maxItems)).ToList();
+
+        builder.AppendLine();
+        if (workloads.Count == 0)
+        {
+            builder.AppendLine("Hiá»‡n chÆ°a tháº¥y ai Ä‘ang giá»¯ task/bug má»Ÿ Ä‘á»ƒ Ä‘Ã¡nh giÃ¡ workload.");
+            return;
+        }
+
+        builder.AppendLine("Workload hiá»‡n táº¡i theo ngÆ°á»i Ä‘ang giá»¯ viá»‡c:");
+        foreach (var workload in workloads)
+        {
+            builder.AppendLine(
+                $"- <@{workload.DiscordUserId}>: `{workload.OpenTaskCount}` task má»Ÿ | `in-progress {workload.InProgressTaskCount}` | `bug {workload.OpenBugCount}` | `{workload.OpenPoints}` Ä‘iá»ƒm | hoáº¡t Ä‘á»™ng gáº§n Ä‘Ã¢y `{workload.RecentActivityCount}`");
         }
     }
 
@@ -427,6 +610,677 @@ public sealed class BotAssistantService(
         }
     }
 
+    private static void AppendMemberProfiles(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var members = insight.Knowledge.Members
+            .OrderBy(x => x.ReliabilityScore)
+            .ThenByDescending(x => x.OpenPoints)
+            .Take(Math.Max(1, maxItems))
+            .ToList();
+
+        builder.AppendLine();
+        if (members.Count == 0)
+        {
+            builder.AppendLine("Chua co member profile du de danh gia nang luc va do tin cay.");
+            return;
+        }
+
+        builder.AppendLine("Member profile noi bat:");
+        foreach (var member in members)
+        {
+            var skills = member.SkillKeywords.Count == 0 ? "chua ro" : string.Join(", ", member.SkillKeywords);
+            builder.AppendLine(
+                $"- <@{member.DiscordUserId}> `{member.RoleSummary}` | reliability `{member.ReliabilityScore}` | open `{member.OpenTaskCount}` task / `{member.OpenBugCount}` bug / `{member.OpenPoints}` points | skill `{skills}` | confidence `{member.ConfidencePercent}`");
+        }
+    }
+
+    private static void AppendMemberSignals(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var signals = insight.Knowledge.MemberSignals
+            .OrderByDescending(x => x.Date)
+            .ThenBy(x => x.ReliabilityScore)
+            .Take(Math.Max(1, maxItems))
+            .ToList();
+
+        builder.AppendLine();
+        if (signals.Count == 0)
+        {
+            builder.AppendLine("Chua co member daily signal gan day.");
+            return;
+        }
+
+        builder.AppendLine("Tin hieu member gan day:");
+        foreach (var signal in signals)
+        {
+            var evidence = signal.Evidence.Count == 0 ? "khong ro" : string.Join(", ", signal.Evidence);
+            var lateText = signal.WasLate ? $" | late `{signal.LateMinutes ?? 0}`m" : string.Empty;
+            builder.AppendLine(
+                $"- {signal.Date:yyyy-MM-dd} <@{signal.DiscordUserId}> | reliability `{signal.ReliabilityScore}` | standup `{(signal.SubmittedStandup ? "co" : "thieu")}`{lateText} | blocker `{(signal.HasBlocker ? "co" : "khong")}` | completed `{signal.CompletedTasks}` | evidence {evidence}");
+        }
+    }
+
+    private static void AppendTopicSummary(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var topics = insight.Knowledge.Topics.Take(Math.Max(1, maxItems)).ToList();
+
+        builder.AppendLine();
+        if (topics.Count == 0)
+        {
+            builder.AppendLine("Chua co topic summary ro rang trong memory.");
+            return;
+        }
+
+        builder.AppendLine("Chu de noi bat:");
+        foreach (var topic in topics)
+        {
+            var channels = topic.TopChannels.Count == 0 ? "khong ro" : string.Join(", ", topic.TopChannels);
+            builder.AppendLine(
+                $"- `{topic.TopicKey}`: `{topic.MentionCount}` lan nhac, `{topic.DistinctAuthorCount}` nguoi tham gia | kenh {channels}");
+        }
+    }
+
+    private static void AppendDecisionSummary(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var decisions = insight.Knowledge.Decisions.Take(Math.Max(1, maxItems)).ToList();
+
+        builder.AppendLine();
+        if (decisions.Count == 0)
+        {
+            builder.AppendLine("Chua thay decision log ro rang trong cua so gan day.");
+            return;
+        }
+
+        builder.AppendLine("Decision log gan day:");
+        foreach (var decision in decisions)
+        {
+            var source = string.IsNullOrWhiteSpace(decision.SourceChannelName) ? string.Empty : $" | #{decision.SourceChannelName}";
+            builder.AppendLine(
+                $"- {decision.Date:yyyy-MM-dd} `{decision.TopicKey}`: {decision.Summary} | confidence `{decision.ConfidencePercent}`{source} | evidence {decision.Evidence}");
+        }
+    }
+
+    private static void AppendRiskSummary(StringBuilder builder, ProjectAssistantContext insight, int maxItems = 4)
+    {
+        var risks = insight.Knowledge.Risks.Take(Math.Max(1, maxItems)).ToList();
+
+        builder.AppendLine();
+        if (risks.Count == 0)
+        {
+            builder.AppendLine("Chua co risk log noi bat trong cua so hien tai.");
+            return;
+        }
+
+        builder.AppendLine("Risk log gan day:");
+        foreach (var risk in risks)
+        {
+            builder.AppendLine(
+                $"- {risk.Date:yyyy-MM-dd} [{risk.Severity}] `{risk.RiskKey}`: {risk.Summary} | confidence `{risk.ConfidencePercent}` | evidence {risk.Evidence}");
+        }
+    }
+
+    private static void AppendTrendSummary(StringBuilder builder, ProjectAssistantContext insight)
+    {
+        var sprintTrend = insight.Knowledge.SprintTrend.OrderBy(x => x.Date).TakeLast(3).ToList();
+        var riskTrend = insight.Knowledge.RiskTrend.OrderBy(x => x.Date).TakeLast(3).ToList();
+
+        builder.AppendLine();
+        if (sprintTrend.Count == 0 && riskTrend.Count == 0)
+        {
+            builder.AppendLine("Chua co lich su trend du de so sanh theo ngay.");
+            return;
+        }
+
+        if (sprintTrend.Count > 0)
+        {
+            builder.AppendLine("Sprint trend:");
+            foreach (var point in sprintTrend)
+            {
+                builder.AppendLine(
+                    $"- {point.Date:MM-dd}: delivery `{point.DeliveryProgressPercent}%`, schedule `{point.ScheduleProgressPercent?.ToString() ?? "?"}%`, stalled `{point.StalledTaskCount}`, bugs `{point.OpenBugCount}`, health `{point.HealthLabel}`");
+            }
+        }
+
+        if (riskTrend.Count > 0)
+        {
+            builder.AppendLine("Risk trend:");
+            foreach (var point in riskTrend)
+            {
+                builder.AppendLine(
+                    $"- {point.Date:MM-dd}: risk `{point.RiskScore}`, overdue `{point.OverdueTaskCount}`, stalled `{point.StalledTaskCount}`, missing standup `{point.MissingStandupCount}`, blockers `{point.BlockerCount}`");
+            }
+        }
+    }
+
+    private static AssistantIntent ClassifyIntent(string question)
+    {
+        var lower = question.Trim().ToLowerInvariant();
+        if (LooksLikeGreeting(lower))
+        {
+            return AssistantIntent.Greeting;
+        }
+
+        if (ContainsAny(lower, "point", "uoc luong", "estimate"))
+        {
+            return AssistantIntent.Estimation;
+        }
+
+        if (ContainsAny(lower, "bao cao", "standup", "tre bao cao", "khong nop", "chua nop", "missing report", "miss standup"))
+        {
+            return AssistantIntent.StandupDiscipline;
+        }
+
+        if (ContainsAny(lower, "member", "thanh vien", "workload", "qua tai", "dang giu", "ai dang lam nhieu", "ai lam nhieu", "phu hop", "ai hop task"))
+        {
+            return AssistantIntent.MemberInsights;
+        }
+
+        if (ContainsAny(lower, "quyet dinh", "decision", "chot gi", "thong nhat", "chot"))
+        {
+            return AssistantIntent.DecisionHistory;
+        }
+
+        if (ContainsAny(lower, "chu de", "topic", "ban nhieu", "nhac nhieu", "hot topic", "tuan qua", "gan day", "da ban", "thao luan", "lich su", "nho lai", "van de gi"))
+        {
+            return AssistantIntent.TopicHistory;
+        }
+
+        if (ContainsAny(lower, "rui ro", "risk", "hot issue", "van de nong", "lech"))
+        {
+            return AssistantIntent.RiskReview;
+        }
+
+        if (ContainsAny(lower, "dinh tre", "stalled", "ket", "tac", "task", "xu ly", "uu tien", "can lam", "bug"))
+        {
+            return AssistantIntent.TaskExecution;
+        }
+
+        if (ContainsAny(lower, "tich cuc", "tieu cuc", "tien do", "sprint", "health"))
+        {
+            return AssistantIntent.ProgressReview;
+        }
+
+        return AssistantIntent.General;
+    }
+
+    private static bool LooksLikeGreeting(string lowerQuestion)
+    {
+        var normalized = lowerQuestion.Trim();
+        return normalized is "hi" or "hello" or "hey" or "alo" or "yo" or "chao" or "xin chao"
+            || normalized.StartsWith("hello ", StringComparison.Ordinal)
+            || normalized.StartsWith("hey ", StringComparison.Ordinal)
+            || normalized.StartsWith("alo ", StringComparison.Ordinal)
+            || normalized.StartsWith("chao ", StringComparison.Ordinal)
+            || normalized.StartsWith("xin chao ", StringComparison.Ordinal);
+    }
+
+    private static string BuildIntentGuidance(AssistantIntent intent)
+    {
+        return intent switch
+        {
+            AssistantIntent.ProgressReview =>
+                "Current intent: progress_review. Prioritize sprint health, delivery vs timeline, task flow, stalled work, risk trend, and the top actionable items.",
+            AssistantIntent.StandupDiscipline =>
+                "Current intent: standup_discipline. Prioritize due time, recent standups, late reporters, missing reporters, blocker evidence, and member daily signals.",
+            AssistantIntent.MemberInsights =>
+                "Current intent: member_insights. Prioritize member profiles, member daily signals, current workloads, recent task activity, and evidence-backed reliability.",
+            AssistantIntent.TopicHistory =>
+                "Current intent: topic_history. Prioritize daily digests, topic summaries, decision logs, risk logs, and only a few relevant historical messages as evidence.",
+            AssistantIntent.DecisionHistory =>
+                "Current intent: decision_history. Prioritize decision logs first, then supporting topics and relevant messages.",
+            AssistantIntent.RiskReview =>
+                "Current intent: risk_review. Prioritize risk logs, risk trend, sprint trend, standup blockers, stalled work, and the top current risks.",
+            AssistantIntent.TaskExecution =>
+                "Current intent: task_execution. Prioritize stalled tasks, open bugs, task flow, owners, and actionable attention items.",
+            AssistantIntent.Estimation =>
+                "Current intent: estimation. Be explicit that estimate confidence depends on task description, dependencies, and technical unknowns.",
+            _ =>
+                "Current intent: general_project_assistant. Use the available context slice and keep the answer concise, evidence-based, and actionable."
+        };
+    }
+
+    private static object BuildAiContextEnvelope(ProjectAssistantContext insight, AssistantIntent intent)
+    {
+        var envelope = new Dictionary<string, object?>
+        {
+            ["intent"] = intent.ToString().ToLowerInvariant(),
+            ["generatedAtLocal"] = insight.GeneratedAtLocal,
+            ["scope"] = new
+            {
+                insight.Scope.ProjectId,
+                insight.Scope.ProjectName,
+                insight.Scope.ChannelId,
+                insight.Scope.ChannelName,
+                insight.Scope.ParentChannelId,
+                insight.Scope.ParentChannelName,
+                insight.Scope.AskingUserId,
+                insight.Scope.AskingUserName
+            },
+            ["recentConversation"] = insight.RecentConversation
+                .TakeLast(6)
+                .Select(x => new
+                {
+                    x.TimestampLocal,
+                    x.AuthorId,
+                    x.AuthorName,
+                    x.IsBot,
+                    x.Content
+                })
+                .ToList()
+        };
+
+        switch (intent)
+        {
+            case AssistantIntent.ProgressReview:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["taskExecution"] = BuildTaskExecutionSlice(insight);
+                envelope["risk"] = BuildRiskSlice(insight);
+                break;
+
+            case AssistantIntent.StandupDiscipline:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["standup"] = BuildStandupSlice(insight);
+                envelope["members"] = BuildMemberSlice(insight, maxProfiles: 3, maxSignals: 5, maxWorkloads: 3);
+                break;
+
+            case AssistantIntent.MemberInsights:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["members"] = BuildMemberSlice(insight);
+                envelope["taskExecution"] = BuildTaskExecutionSlice(insight, maxStalledTasks: 3, maxAttentionItems: 3);
+                break;
+
+            case AssistantIntent.DecisionHistory:
+                envelope["history"] = BuildHistorySlice(insight, maxDigests: 2, maxMessages: 2, maxTopics: 3, maxDecisions: 4, maxRisks: 2);
+                break;
+
+            case AssistantIntent.TopicHistory:
+                envelope["history"] = BuildHistorySlice(insight);
+                envelope["taskExecution"] = BuildTaskExecutionSlice(insight, maxStalledTasks: 3, maxAttentionItems: 3);
+                break;
+
+            case AssistantIntent.RiskReview:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["standup"] = BuildStandupSlice(insight, maxRecentStandups: 4, maxLateReporters: 3, maxMissingReporters: 3);
+                envelope["risk"] = BuildRiskSlice(insight);
+                break;
+
+            case AssistantIntent.TaskExecution:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["taskExecution"] = BuildTaskExecutionSlice(insight);
+                envelope["members"] = BuildMemberSlice(insight, maxProfiles: 3, maxSignals: 3, maxWorkloads: 4);
+                break;
+
+            case AssistantIntent.Estimation:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["members"] = BuildMemberSlice(insight, maxProfiles: 3, maxSignals: 2, maxWorkloads: 3);
+                break;
+
+            default:
+                envelope["sprint"] = BuildSprintSlice(insight);
+                envelope["standup"] = BuildStandupSlice(insight, maxRecentStandups: 3, maxLateReporters: 2, maxMissingReporters: 2);
+                envelope["taskExecution"] = BuildTaskExecutionSlice(insight, maxStalledTasks: 3, maxAttentionItems: 3);
+                envelope["risk"] = BuildRiskSlice(insight, maxRisks: 3, maxTrendPoints: 3);
+                break;
+        }
+
+        return envelope;
+    }
+
+    private static object BuildSprintSlice(ProjectAssistantContext insight)
+    {
+        return new
+        {
+            insight.Sprint.HasActiveSprint,
+            insight.Sprint.SprintId,
+            insight.Sprint.Name,
+            insight.Sprint.Goal,
+            insight.Sprint.StartDateLocal,
+            insight.Sprint.EndDateLocal,
+            insight.Sprint.TotalTasks,
+            insight.Sprint.DoneTasks,
+            insight.Sprint.TodoTasks,
+            insight.Sprint.InProgressTasks,
+            insight.Sprint.ProjectBacklogCount,
+            insight.Sprint.OpenBugCount,
+            insight.Sprint.TotalPoints,
+            insight.Sprint.DonePoints,
+            insight.Sprint.InProgressPoints,
+            insight.Sprint.DeliveryProgressPercent,
+            insight.Sprint.ScheduleProgressPercent,
+            health = new
+            {
+                insight.Sprint.Health.Label,
+                insight.Sprint.Health.Summary,
+                insight.Sprint.Health.DeltaPercent
+            }
+        };
+    }
+
+    private static object BuildStandupSlice(
+        ProjectAssistantContext insight,
+        int maxRecentStandups = 6,
+        int maxLateReporters = 4,
+        int maxMissingReporters = 4)
+    {
+        return new
+        {
+            insight.StandupDiscipline.LookbackDays,
+            insight.StandupDiscipline.DueTimeLocal,
+            insight.StandupDiscipline.ExpectedReporterCount,
+            recentStandups = insight.Standups
+                .Take(maxRecentStandups)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.DiscordUserId,
+                    x.ReportedAtLocal,
+                    x.Yesterday,
+                    x.Today,
+                    x.Blockers,
+                    x.HasBlockers
+                })
+                .ToList(),
+            lateReporters = insight.StandupDiscipline.LateReporters
+                .Take(maxLateReporters)
+                .Select(x => new
+                {
+                    x.DiscordUserId,
+                    x.TotalReports,
+                    x.LateReports,
+                    x.OnTimeReports,
+                    x.LateRatePercent,
+                    x.AverageLateMinutes,
+                    x.LastReportedAtLocal,
+                    x.WasLateLastReport
+                })
+                .ToList(),
+            missingReporters = insight.StandupDiscipline.MissingReporters
+                .Take(maxMissingReporters)
+                .Select(x => new
+                {
+                    x.DiscordUserId,
+                    x.MissingDays,
+                    x.SubmittedDays,
+                    x.LastMissingDate,
+                    x.MissingToday,
+                    x.BasisSummary
+                })
+                .ToList()
+        };
+    }
+
+    private static object BuildMemberSlice(
+        ProjectAssistantContext insight,
+        int maxProfiles = 5,
+        int maxSignals = 6,
+        int maxWorkloads = 5)
+    {
+        return new
+        {
+            memberProfiles = insight.Knowledge.Members
+                .OrderBy(x => x.ReliabilityScore)
+                .ThenByDescending(x => x.OpenPoints)
+                .Take(maxProfiles)
+                .Select(x => new
+                {
+                    x.DiscordUserId,
+                    x.DisplayName,
+                    x.RoleSummary,
+                    x.SkillKeywords,
+                    x.ActiveChannels,
+                    x.OpenTaskCount,
+                    x.OpenBugCount,
+                    x.OpenPoints,
+                    x.ReliabilityScore,
+                    x.ConfidencePercent,
+                    x.EvidenceSummary
+                })
+                .ToList(),
+            memberSignals = insight.Knowledge.MemberSignals
+                .OrderByDescending(x => x.Date)
+                .ThenBy(x => x.ReliabilityScore)
+                .Take(maxSignals)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.DiscordUserId,
+                    x.ExpectedStandup,
+                    x.SubmittedStandup,
+                    x.WasLate,
+                    x.LateMinutes,
+                    x.HasBlocker,
+                    x.CompletedTasks,
+                    x.FixedBugs,
+                    x.ActivityCount,
+                    x.OpenTaskCount,
+                    x.OpenBugCount,
+                    x.OpenPoints,
+                    x.ReliabilityScore,
+                    x.Evidence
+                })
+                .ToList(),
+            memberWorkloads = insight.MemberWorkloads
+                .OrderByDescending(x => x.OpenPoints)
+                .ThenByDescending(x => x.OpenTaskCount)
+                .ThenByDescending(x => x.OpenBugCount)
+                .Take(maxWorkloads)
+                .Select(x => new
+                {
+                    x.DiscordUserId,
+                    x.OpenTaskCount,
+                    x.InProgressTaskCount,
+                    x.OpenBugCount,
+                    x.OpenPoints,
+                    x.RecentActivityCount
+                })
+                .ToList()
+        };
+    }
+
+    private static object BuildTaskExecutionSlice(
+        ProjectAssistantContext insight,
+        int maxStalledTasks = 5,
+        int maxAttentionItems = 5)
+    {
+        return new
+        {
+            taskFlow = new
+            {
+                insight.TaskFlow.LookbackDays,
+                insight.TaskFlow.TotalEvents,
+                insight.TaskFlow.CreatedTasks,
+                insight.TaskFlow.CompletedTasks,
+                insight.TaskFlow.CreatedBugs,
+                insight.TaskFlow.FixedBugs,
+                insight.TaskFlow.ReturnedToBacklog,
+                topActors = insight.TaskFlow.TopActors
+                    .Take(4)
+                    .Select(x => new
+                    {
+                        x.DiscordUserId,
+                        x.EventCount,
+                        x.CompletedTasks,
+                        x.FixedBugs,
+                        x.ClaimedOrAssignedTasks
+                    })
+                    .ToList()
+            },
+            stalledTasks = insight.StalledTasks
+                .Take(maxStalledTasks)
+                .Select(x => new
+                {
+                    x.TaskId,
+                    x.Title,
+                    x.Status,
+                    x.Points,
+                    x.AssigneeId,
+                    x.AgeDays,
+                    x.DaysWithoutChange,
+                    x.Reason,
+                    x.IsOverdue,
+                    x.Evidence
+                })
+                .ToList(),
+            attentionItems = insight.AttentionItems
+                .Take(maxAttentionItems)
+                .Select(x => new
+                {
+                    x.Kind,
+                    x.Title,
+                    x.Summary,
+                    x.TaskId,
+                    x.Status,
+                    x.Points,
+                    x.AssigneeId
+                })
+                .ToList()
+        };
+    }
+
+    private static object BuildHistorySlice(
+        ProjectAssistantContext insight,
+        int maxDigests = 3,
+        int maxMessages = 4,
+        int maxTopics = 5,
+        int maxDecisions = 4,
+        int maxRisks = 4)
+    {
+        return new
+        {
+            memoryCoverage = new
+            {
+                insight.Memory.ArchivedMessageCount,
+                insight.Memory.OldestLocalDate,
+                insight.Memory.LatestLocalDate
+            },
+            dailyDigests = insight.Memory.DailyDigests
+                .Take(maxDigests)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.Summary,
+                    x.MessageCount,
+                    x.DistinctAuthorCount,
+                    x.BlockerCount,
+                    x.TopKeywords,
+                    x.ActiveChannels,
+                    x.Highlights
+                })
+                .ToList(),
+            relevantMessages = insight.Memory.RelevantMessages
+                .Take(maxMessages)
+                .Select(x => new
+                {
+                    x.TimestampLocal,
+                    x.ChannelName,
+                    x.ThreadName,
+                    x.AuthorName,
+                    x.Content
+                })
+                .ToList(),
+            topics = insight.Knowledge.Topics
+                .Take(maxTopics)
+                .Select(x => new
+                {
+                    x.TopicKey,
+                    x.MentionCount,
+                    x.DistinctAuthorCount,
+                    x.TopChannels,
+                    x.TopAuthors,
+                    x.Summary
+                })
+                .ToList(),
+            decisions = insight.Knowledge.Decisions
+                .Take(maxDecisions)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.TopicKey,
+                    x.Summary,
+                    x.Evidence,
+                    x.ConfidencePercent,
+                    x.SourceChannelName
+                })
+                .ToList(),
+            risks = insight.Knowledge.Risks
+                .Take(maxRisks)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.RiskKey,
+                    x.Severity,
+                    x.Summary,
+                    x.Evidence,
+                    x.ConfidencePercent
+                })
+                .ToList()
+        };
+    }
+
+    private static object BuildRiskSlice(
+        ProjectAssistantContext insight,
+        int maxRisks = 5,
+        int maxTrendPoints = 4)
+    {
+        return new
+        {
+            currentRisks = insight.Knowledge.Risks
+                .Take(maxRisks)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.RiskKey,
+                    x.Severity,
+                    x.Summary,
+                    x.Evidence,
+                    x.ConfidencePercent
+                })
+                .ToList(),
+            sprintTrend = insight.Knowledge.SprintTrend
+                .OrderBy(x => x.Date)
+                .TakeLast(maxTrendPoints)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.DeliveryProgressPercent,
+                    x.ScheduleProgressPercent,
+                    x.OpenBugCount,
+                    x.StalledTaskCount,
+                    x.HealthLabel,
+                    x.HealthDeltaPercent
+                })
+                .ToList(),
+            riskTrend = insight.Knowledge.RiskTrend
+                .OrderBy(x => x.Date)
+                .TakeLast(maxTrendPoints)
+                .Select(x => new
+                {
+                    x.Date,
+                    x.RiskScore,
+                    x.OpenRiskCount,
+                    x.OverdueTaskCount,
+                    x.StalledTaskCount,
+                    x.MissingStandupCount,
+                    x.OpenBugCount,
+                    x.BlockerCount,
+                    x.Summary
+                })
+                .ToList(),
+            attentionItems = insight.AttentionItems
+                .Take(4)
+                .Select(x => new
+                {
+                    x.Kind,
+                    x.Title,
+                    x.Summary,
+                    x.TaskId,
+                    x.Status,
+                    x.Points,
+                    x.AssigneeId
+                })
+                .ToList()
+        };
+    }
+
     private static string BuildSystemPrompt()
     {
         return
@@ -434,14 +1288,18 @@ public sealed class BotAssistantService(
             "Always answer in Vietnamese. " +
             "Use only the provided context. If the data is missing, say that clearly instead of guessing. " +
             "Be concise, natural, and actionable. " +
+            "The JSON context is an intent-specific slice, not the full project graph. " +
             "The project context is project-wide, not limited to the current channel, as long as the current channel belongs to that project. " +
             "The memory section contains archived project messages, daily digests, and relevant historical traces. " +
+            "The knowledge section contains structured member profiles, member daily signals, topic mentions, decision logs, risk logs, sprint trend points, and risk trend points. " +
             "For progress questions, cite the important metrics. " +
             "For prioritization questions, focus on blockers, overdue work, stalled tasks, unassigned work, open bugs, and high-point unfinished tasks. " +
             "For late or missing standup questions, use the standupDiscipline summary and do not invent missing reports that are not in the data. " +
             "Missing reporters are inferred heuristically from open task assignees, recent standup reporters, and repeated recent project participants. " +
-            "For stalled task questions, use the stalledTasks list and mention that the heuristic is based on task age and current status because there is no status-change history yet. " +
-            "For weekly discussion or history questions, rely on the daily digests first, then use relevant historical messages as evidence. " +
+            "For stalled task questions, use the stalledTasks list, daysWithoutChange, evidence, and recent taskFlow data before concluding that a task is stuck. " +
+            "Use memberWorkloads and member profiles for questions about who is carrying the most open work right now. " +
+            "For weekly discussion or history questions, rely on topics, decisions, risks, and daily digests first, then use relevant historical messages as evidence. " +
+            "When answering about people, topics, decisions, or risks, mention evidence, time range, and confidence when the context provides them. " +
             "For story point questions, provide an estimate with rationale and uncertainty. " +
             "Do not claim you searched the whole Discord if the context only contains summaries or recent messages.";
     }
@@ -518,4 +1376,18 @@ public sealed class BotAssistantService(
     {
         return value.Length <= maxLength ? value : $"{value[..maxLength]}...";
     }
+}
+
+internal enum AssistantIntent
+{
+    General,
+    Greeting,
+    ProgressReview,
+    StandupDiscipline,
+    MemberInsights,
+    DecisionHistory,
+    TopicHistory,
+    RiskReview,
+    TaskExecution,
+    Estimation
 }

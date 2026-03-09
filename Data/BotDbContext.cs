@@ -13,6 +13,14 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<GitHubRepoBinding> GitHubRepoBindings => Set<GitHubRepoBinding>();
     public DbSet<ProjectMemoryMessage> ProjectMemoryMessages => Set<ProjectMemoryMessage>();
     public DbSet<ProjectDailyDigest> ProjectDailyDigests => Set<ProjectDailyDigest>();
+    public DbSet<TaskEvent> TaskEvents => Set<TaskEvent>();
+    public DbSet<MemberProfile> MemberProfiles => Set<MemberProfile>();
+    public DbSet<MemberDailySignal> MemberDailySignals => Set<MemberDailySignal>();
+    public DbSet<TopicMention> TopicMentions => Set<TopicMention>();
+    public DbSet<DecisionLog> DecisionLogs => Set<DecisionLog>();
+    public DbSet<RiskLog> RiskLogs => Set<RiskLog>();
+    public DbSet<SprintDailySnapshot> SprintDailySnapshots => Set<SprintDailySnapshot>();
+    public DbSet<ProjectRiskSnapshot> ProjectRiskSnapshots => Set<ProjectRiskSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -116,6 +124,132 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
 
             entity.HasIndex(x => new { x.ProjectId, x.LocalDate }).IsUnique();
             entity.HasIndex(x => new { x.ProjectId, x.GeneratedAtUtc });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TaskEvent>(entity =>
+        {
+            entity.Property(x => x.TaskType).HasConversion<string>();
+            entity.Property(x => x.EventType).HasConversion<string>();
+            entity.Property(x => x.FromStatus).HasConversion<string>();
+            entity.Property(x => x.ToStatus).HasConversion<string>();
+            entity.Property(x => x.TitleSnapshot).HasMaxLength(200);
+            entity.Property(x => x.DescriptionSnapshot).HasMaxLength(1200);
+            entity.Property(x => x.Summary).HasMaxLength(500);
+            entity.Property(x => x.Source).HasMaxLength(64);
+
+            entity.HasIndex(x => new { x.ProjectId, x.OccurredAtUtc });
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+            entity.HasIndex(x => new { x.TaskItemId, x.OccurredAtUtc });
+            entity.HasIndex(x => new { x.ProjectId, x.ActorDiscordId, x.OccurredAtUtc });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MemberProfile>(entity =>
+        {
+            entity.Property(x => x.DisplayName).HasMaxLength(100);
+            entity.Property(x => x.RoleSummary).HasMaxLength(64);
+            entity.Property(x => x.SkillKeywordsJson).HasMaxLength(1200);
+            entity.Property(x => x.ActiveChannelsJson).HasMaxLength(1200);
+            entity.Property(x => x.EvidenceSummary).HasMaxLength(1000);
+
+            entity.HasIndex(x => new { x.ProjectId, x.DiscordUserId }).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.ReliabilityScore });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MemberDailySignal>(entity =>
+        {
+            entity.Property(x => x.EvidenceJson).HasMaxLength(2000);
+
+            entity.HasIndex(x => new { x.ProjectId, x.DiscordUserId, x.LocalDate }).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TopicMention>(entity =>
+        {
+            entity.Property(x => x.TopicKey).HasMaxLength(64);
+            entity.Property(x => x.TopChannelsJson).HasMaxLength(1200);
+            entity.Property(x => x.TopAuthorsJson).HasMaxLength(1200);
+            entity.Property(x => x.SourceSummary).HasMaxLength(1200);
+            entity.Property(x => x.EvidenceJson).HasMaxLength(2000);
+
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate, x.TopicKey }).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.TopicKey, x.LocalDate });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DecisionLog>(entity =>
+        {
+            entity.Property(x => x.TopicKey).HasMaxLength(64);
+            entity.Property(x => x.Summary).HasMaxLength(500);
+            entity.Property(x => x.Evidence).HasMaxLength(1000);
+            entity.Property(x => x.SourceChannelName).HasMaxLength(100);
+
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+            entity.HasIndex(x => new { x.ProjectId, x.TopicKey, x.LocalDate });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RiskLog>(entity =>
+        {
+            entity.Property(x => x.RiskKey).HasMaxLength(96);
+            entity.Property(x => x.Severity).HasMaxLength(24);
+            entity.Property(x => x.Summary).HasMaxLength(500);
+            entity.Property(x => x.Evidence).HasMaxLength(1000);
+
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+            entity.HasIndex(x => new { x.ProjectId, x.RiskKey, x.LocalDate });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SprintDailySnapshot>(entity =>
+        {
+            entity.Property(x => x.HealthLabel).HasMaxLength(32);
+
+            entity.HasIndex(x => new { x.ProjectId, x.SprintId, x.LocalDate }).IsUnique();
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate });
+
+            entity.HasOne(x => x.Project)
+                .WithMany()
+                .HasForeignKey(x => x.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProjectRiskSnapshot>(entity =>
+        {
+            entity.Property(x => x.Summary).HasMaxLength(500);
+
+            entity.HasIndex(x => new { x.ProjectId, x.LocalDate }).IsUnique();
 
             entity.HasOne(x => x.Project)
                 .WithMany()

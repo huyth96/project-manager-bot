@@ -48,9 +48,12 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<StudioTimeService>();
 builder.Services.AddSingleton<InitialSetupService>();
 builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddSingleton<TaskEventService>();
 builder.Services.AddSingleton<ProjectMemoryService>();
+builder.Services.AddSingleton<ProjectKnowledgeService>();
 builder.Services.AddSingleton<ProjectInsightService>();
 builder.Services.AddSingleton<ProjectDailyLeadReportService>();
+builder.Services.AddSingleton<ProjectWeeklyReviewService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<BotAssistantService>();
 
@@ -92,12 +95,15 @@ await using (var scope = host.Services.CreateAsyncScope())
     await EnsureColumnAsync(db, "Projects", "GlobalNotificationChannelId", "INTEGER NULL");
     await EnsureColumnAsync(db, "Projects", "GitHubCommitsChannelId", "INTEGER NULL");
     await EnsureColumnAsync(db, "Projects", "LastLeadReportDateLocal", "TEXT NULL");
+    await EnsureColumnAsync(db, "Projects", "LastWeeklyReviewDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "StartDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "EndDateLocal", "TEXT NULL");
     await EnsureGitHubRepoBindingsTableAsync(db);
     await EnsureProjectMemoryMessagesTableAsync(db);
     await EnsureProjectDailyDigestsTableAsync(db);
+    await EnsureTaskEventsTableAsync(db);
+    await EnsureKnowledgeTablesAsync(db);
 }
 
 await host.RunAsync();
@@ -356,6 +362,8 @@ static async Task EnsureColumnAsync(BotDbContext db, string table, string column
                 "ALTER TABLE \"Projects\" ADD COLUMN \"GitHubCommitsChannelId\" INTEGER NULL;",
             ("Projects", "LastLeadReportDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"Projects\" ADD COLUMN \"LastLeadReportDateLocal\" TEXT NULL;",
+            ("Projects", "LastWeeklyReviewDateLocal", "TEXT NULL") =>
+                "ALTER TABLE \"Projects\" ADD COLUMN \"LastWeeklyReviewDateLocal\" TEXT NULL;",
             ("TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"TaskItems\" ADD COLUMN \"LastOverdueReminderDateLocal\" TEXT NULL;",
             ("Sprints", "StartDateLocal", "TEXT NULL") =>
@@ -450,6 +458,191 @@ static async Task EnsureProjectDailyDigestsTableAsync(BotDbContext db)
     await db.Database.ExecuteSqlRawAsync(
         "CREATE INDEX IF NOT EXISTS \"IX_ProjectDailyDigests_ProjectId_GeneratedAtUtc\" " +
         "ON \"ProjectDailyDigests\" (\"ProjectId\", \"GeneratedAtUtc\");");
+}
+
+static async Task EnsureTaskEventsTableAsync(BotDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"TaskEvents\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_TaskEvents\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"TaskItemId\" INTEGER NOT NULL, " +
+        "\"TaskType\" TEXT NOT NULL, " +
+        "\"EventType\" TEXT NOT NULL, " +
+        "\"ActorDiscordId\" INTEGER NULL, " +
+        "\"OccurredAtUtc\" TEXT NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"TitleSnapshot\" TEXT NOT NULL, " +
+        "\"DescriptionSnapshot\" TEXT NULL, " +
+        "\"FromStatus\" TEXT NULL, " +
+        "\"ToStatus\" TEXT NULL, " +
+        "\"FromAssigneeId\" INTEGER NULL, " +
+        "\"ToAssigneeId\" INTEGER NULL, " +
+        "\"FromSprintId\" INTEGER NULL, " +
+        "\"ToSprintId\" INTEGER NULL, " +
+        "\"FromPoints\" INTEGER NULL, " +
+        "\"ToPoints\" INTEGER NULL, " +
+        "\"Summary\" TEXT NULL, " +
+        "\"Source\" TEXT NULL, " +
+        "CONSTRAINT \"FK_TaskEvents_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_TaskEvents_ProjectId_OccurredAtUtc\" " +
+        "ON \"TaskEvents\" (\"ProjectId\", \"OccurredAtUtc\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_TaskEvents_ProjectId_LocalDate\" " +
+        "ON \"TaskEvents\" (\"ProjectId\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_TaskEvents_TaskItemId_OccurredAtUtc\" " +
+        "ON \"TaskEvents\" (\"TaskItemId\", \"OccurredAtUtc\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE INDEX IF NOT EXISTS \"IX_TaskEvents_ProjectId_ActorDiscordId_OccurredAtUtc\" " +
+        "ON \"TaskEvents\" (\"ProjectId\", \"ActorDiscordId\", \"OccurredAtUtc\");");
+}
+
+static async Task EnsureKnowledgeTablesAsync(BotDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"MemberProfiles\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_MemberProfiles\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"DiscordUserId\" INTEGER NOT NULL, " +
+        "\"DisplayName\" TEXT NOT NULL, " +
+        "\"RoleSummary\" TEXT NOT NULL, " +
+        "\"SkillKeywordsJson\" TEXT NOT NULL, " +
+        "\"ActiveChannelsJson\" TEXT NOT NULL, " +
+        "\"TotalMessageCount\" INTEGER NOT NULL, " +
+        "\"TotalStandupReports\" INTEGER NOT NULL, " +
+        "\"TotalTaskEvents\" INTEGER NOT NULL, " +
+        "\"OpenTaskCount\" INTEGER NOT NULL, " +
+        "\"OpenBugCount\" INTEGER NOT NULL, " +
+        "\"OpenPoints\" INTEGER NOT NULL, " +
+        "\"ReliabilityScore\" INTEGER NOT NULL, " +
+        "\"ConfidencePercent\" INTEGER NOT NULL, " +
+        "\"EvidenceSummary\" TEXT NOT NULL, " +
+        "\"LastSignalDate\" TEXT NULL, " +
+        "\"LastSeenAtUtc\" TEXT NULL, " +
+        "\"UpdatedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_MemberProfiles_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_MemberProfiles_ProjectId_DiscordUserId\" ON \"MemberProfiles\" (\"ProjectId\", \"DiscordUserId\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_MemberProfiles_ProjectId_ReliabilityScore\" ON \"MemberProfiles\" (\"ProjectId\", \"ReliabilityScore\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"MemberDailySignals\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_MemberDailySignals\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"DiscordUserId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"ExpectedStandup\" INTEGER NOT NULL, " +
+        "\"SubmittedStandup\" INTEGER NOT NULL, " +
+        "\"WasLate\" INTEGER NOT NULL, " +
+        "\"LateMinutes\" INTEGER NULL, " +
+        "\"HasBlocker\" INTEGER NOT NULL, " +
+        "\"CompletedTasks\" INTEGER NOT NULL, " +
+        "\"FixedBugs\" INTEGER NOT NULL, " +
+        "\"ActivityCount\" INTEGER NOT NULL, " +
+        "\"OpenTaskCount\" INTEGER NOT NULL, " +
+        "\"OpenBugCount\" INTEGER NOT NULL, " +
+        "\"OpenPoints\" INTEGER NOT NULL, " +
+        "\"ReliabilityScore\" INTEGER NOT NULL, " +
+        "\"EvidenceJson\" TEXT NOT NULL, " +
+        "\"UpdatedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_MemberDailySignals_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_MemberDailySignals_ProjectId_DiscordUserId_LocalDate\" ON \"MemberDailySignals\" (\"ProjectId\", \"DiscordUserId\", \"LocalDate\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_MemberDailySignals_ProjectId_LocalDate\" ON \"MemberDailySignals\" (\"ProjectId\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"TopicMentions\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_TopicMentions\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"TopicKey\" TEXT NOT NULL, " +
+        "\"MentionCount\" INTEGER NOT NULL, " +
+        "\"DistinctAuthorCount\" INTEGER NOT NULL, " +
+        "\"TopChannelsJson\" TEXT NOT NULL, " +
+        "\"TopAuthorsJson\" TEXT NOT NULL, " +
+        "\"SourceSummary\" TEXT NOT NULL, " +
+        "\"EvidenceJson\" TEXT NOT NULL, " +
+        "\"UpdatedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_TopicMentions_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_TopicMentions_ProjectId_LocalDate_TopicKey\" ON \"TopicMentions\" (\"ProjectId\", \"LocalDate\", \"TopicKey\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_TopicMentions_ProjectId_TopicKey_LocalDate\" ON \"TopicMentions\" (\"ProjectId\", \"TopicKey\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"DecisionLogs\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_DecisionLogs\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"TopicKey\" TEXT NOT NULL, " +
+        "\"Summary\" TEXT NOT NULL, " +
+        "\"Evidence\" TEXT NOT NULL, " +
+        "\"ConfidencePercent\" INTEGER NOT NULL, " +
+        "\"SourceMessageId\" INTEGER NULL, " +
+        "\"SourceChannelName\" TEXT NULL, " +
+        "\"CreatedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_DecisionLogs_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_DecisionLogs_ProjectId_LocalDate\" ON \"DecisionLogs\" (\"ProjectId\", \"LocalDate\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_DecisionLogs_ProjectId_TopicKey_LocalDate\" ON \"DecisionLogs\" (\"ProjectId\", \"TopicKey\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"RiskLogs\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_RiskLogs\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"RiskKey\" TEXT NOT NULL, " +
+        "\"Severity\" TEXT NOT NULL, " +
+        "\"Summary\" TEXT NOT NULL, " +
+        "\"Evidence\" TEXT NOT NULL, " +
+        "\"ConfidencePercent\" INTEGER NOT NULL, " +
+        "\"CreatedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_RiskLogs_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_RiskLogs_ProjectId_LocalDate\" ON \"RiskLogs\" (\"ProjectId\", \"LocalDate\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_RiskLogs_ProjectId_RiskKey_LocalDate\" ON \"RiskLogs\" (\"ProjectId\", \"RiskKey\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"SprintDailySnapshots\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_SprintDailySnapshots\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"SprintId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"TotalTasks\" INTEGER NOT NULL, " +
+        "\"DoneTasks\" INTEGER NOT NULL, " +
+        "\"InProgressTasks\" INTEGER NOT NULL, " +
+        "\"BacklogTasksInSprint\" INTEGER NOT NULL, " +
+        "\"OpenBugCount\" INTEGER NOT NULL, " +
+        "\"TotalPoints\" INTEGER NOT NULL, " +
+        "\"DonePoints\" INTEGER NOT NULL, " +
+        "\"InProgressPoints\" INTEGER NOT NULL, " +
+        "\"DeliveryProgressPercent\" INTEGER NOT NULL, " +
+        "\"ScheduleProgressPercent\" INTEGER NULL, " +
+        "\"StalledTaskCount\" INTEGER NOT NULL, " +
+        "\"OverdueTaskCount\" INTEGER NOT NULL, " +
+        "\"HealthLabel\" TEXT NOT NULL, " +
+        "\"HealthDeltaPercent\" INTEGER NULL, " +
+        "\"GeneratedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_SprintDailySnapshots_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_SprintDailySnapshots_ProjectId_SprintId_LocalDate\" ON \"SprintDailySnapshots\" (\"ProjectId\", \"SprintId\", \"LocalDate\");");
+    await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_SprintDailySnapshots_ProjectId_LocalDate\" ON \"SprintDailySnapshots\" (\"ProjectId\", \"LocalDate\");");
+
+    await db.Database.ExecuteSqlRawAsync(
+        "CREATE TABLE IF NOT EXISTS \"ProjectRiskSnapshots\" (" +
+        "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ProjectRiskSnapshots\" PRIMARY KEY AUTOINCREMENT, " +
+        "\"ProjectId\" INTEGER NOT NULL, " +
+        "\"LocalDate\" TEXT NOT NULL, " +
+        "\"RiskScore\" INTEGER NOT NULL, " +
+        "\"OpenRiskCount\" INTEGER NOT NULL, " +
+        "\"OverdueTaskCount\" INTEGER NOT NULL, " +
+        "\"StalledTaskCount\" INTEGER NOT NULL, " +
+        "\"MissingStandupCount\" INTEGER NOT NULL, " +
+        "\"OpenBugCount\" INTEGER NOT NULL, " +
+        "\"BlockerCount\" INTEGER NOT NULL, " +
+        "\"Summary\" TEXT NOT NULL, " +
+        "\"GeneratedAtUtc\" TEXT NOT NULL, " +
+        "CONSTRAINT \"FK_ProjectRiskSnapshots_Projects_ProjectId\" FOREIGN KEY (\"ProjectId\") REFERENCES \"Projects\" (\"Id\") ON DELETE CASCADE);");
+    await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ProjectRiskSnapshots_ProjectId_LocalDate\" ON \"ProjectRiskSnapshots\" (\"ProjectId\", \"LocalDate\");");
 }
 
 

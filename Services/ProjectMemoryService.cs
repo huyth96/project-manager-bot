@@ -136,11 +136,11 @@ public sealed class ProjectMemoryService(
         string? question,
         CancellationToken cancellationToken = default)
     {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
         var digestDays = Math.Clamp(_options.MemoryDigestDays, 1, 14);
         var digestFromDate = _studioTime.LocalDate.AddDays(-(digestDays - 1));
-        await EnsureDailyDigestsAsync(db, projectId, digestFromDate, _studioTime.LocalDate, cancellationToken);
+        await EnsureDailyDigestsAsync(projectId, digestFromDate, _studioTime.LocalDate, cancellationToken);
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var digests = await db.ProjectDailyDigests
             .AsNoTracking()
@@ -191,7 +191,17 @@ public sealed class ProjectMemoryService(
             RelevantMessages: relevantMessages);
     }
 
-    private async Task EnsureDailyDigestsAsync(
+    public async Task EnsureDailyDigestsAsync(
+        int projectId,
+        DateTime fromDate,
+        DateTime toDate,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await EnsureDailyDigestsCoreAsync(db, projectId, fromDate, toDate, cancellationToken);
+    }
+
+    private async Task EnsureDailyDigestsCoreAsync(
         BotDbContext db,
         int projectId,
         DateTime fromDate,

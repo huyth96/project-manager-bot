@@ -8,14 +8,18 @@ public sealed class AutomationService(
     IDbContextFactory<BotDbContext> dbContextFactory,
     ProjectService projectService,
     ProjectDailyLeadReportService projectDailyLeadReportService,
+    ProjectWeeklyReviewService projectWeeklyReviewService,
     NotificationService notificationService,
+    TaskEventService taskEventService,
     StudioTimeService studioTime,
     ILogger<AutomationService> logger) : BackgroundService
 {
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ProjectService _projectService = projectService;
     private readonly ProjectDailyLeadReportService _projectDailyLeadReportService = projectDailyLeadReportService;
+    private readonly ProjectWeeklyReviewService _projectWeeklyReviewService = projectWeeklyReviewService;
     private readonly NotificationService _notificationService = notificationService;
+    private readonly TaskEventService _taskEventService = taskEventService;
     private readonly StudioTimeService _studioTime = studioTime;
     private readonly ILogger<AutomationService> _logger = logger;
     private DateTimeOffset _lastOverdueSweepLocal = DateTimeOffset.MinValue;
@@ -30,6 +34,7 @@ public sealed class AutomationService(
             {
                 await TryRunStandupPromptAsync(stoppingToken);
                 await TryRunDailyLeadReportAsync(stoppingToken);
+                await TryRunWeeklyReviewAsync(stoppingToken);
                 await TryRunOverdueTaskReminderAsync(stoppingToken);
                 await TryRunSprintAutoCloseAsync(stoppingToken);
                 await timer.WaitForNextTickAsync(stoppingToken);
@@ -184,6 +189,9 @@ public sealed class AutomationService(
 
             var doneTasks = sprintTasks.Where(x => x.Status == TaskItemStatus.Done).ToList();
             var unfinishedTasks = sprintTasks.Where(x => x.Status != TaskItemStatus.Done).ToList();
+            var beforeSnapshots = unfinishedTasks
+                .Select(TaskEventSnapshot.FromTask)
+                .ToDictionary(x => x.TaskItemId);
             var velocity = doneTasks.Sum(x => x.Points);
 
             foreach (var task in unfinishedTasks)
@@ -197,6 +205,12 @@ public sealed class AutomationService(
             sprint.EndedAtUtc = DateTimeOffset.UtcNow;
 
             await db.SaveChangesAsync(cancellationToken);
+            await _taskEventService.RecordUpdatedRangeAsync(
+                unfinishedTasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+                actorDiscordId: null,
+                TaskEventType.ReturnedToBacklog,
+                "auto_close_sprint",
+                cancellationToken);
 
             await _projectService.RefreshDashboardMessageAsync(sprint.ProjectId, cancellationToken);
             await _notificationService.NotifySprintEndedAsync(
@@ -247,6 +261,42 @@ public sealed class AutomationService(
 
             _logger.LogInformation(
                 "Đã gửi daily lead report cho dự án {ProjectId} vào {LocalDate}",
+                project.Id,
+                _studioTime.LocalDate);
+        }
+    }
+
+    private async Task TryRunWeeklyReviewAsync(CancellationToken cancellationToken)
+    {
+        var localNow = _studioTime.LocalNow;
+        if (localNow.DayOfWeek != DayOfWeek.Sunday || localNow.Hour < 19)
+        {
+            return;
+        }
+
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var projects = await db.Projects
+            .OrderBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        foreach (var project in projects)
+        {
+            if (project.LastWeeklyReviewDateLocal?.Date == _studioTime.LocalDate.Date)
+            {
+                continue;
+            }
+
+            var sent = await _projectWeeklyReviewService.SendWeeklyReviewAsync(project.Id, cancellationToken);
+            if (!sent)
+            {
+                continue;
+            }
+
+            project.LastWeeklyReviewDateLocal = _studioTime.LocalDate;
+            await db.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Da gui weekly review cho du an {ProjectId} vao {LocalDate}",
                 project.Id,
                 _studioTime.LocalDate);
         }

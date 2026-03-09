@@ -213,6 +213,14 @@ public sealed class NotificationService(
         Embed embed,
         CancellationToken cancellationToken = default)
     {
+        await SendProjectFeedAsync(projectId, embed, cancellationToken);
+    }
+
+    public async Task SendProjectFeedAsync(
+        int projectId,
+        Embed embed,
+        CancellationToken cancellationToken = default)
+    {
         await SendAsync(projectId, embed, cancellationToken);
     }
 

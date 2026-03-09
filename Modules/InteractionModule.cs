@@ -19,6 +19,7 @@ public sealed class InteractionModule(
     InitialSetupService initialSetupService,
     ProjectService projectService,
     NotificationService notificationService,
+    TaskEventService taskEventService,
     StudioTimeService studioTime,
     IDbContextFactory<BotDbContext> dbContextFactory,
     ILogger<InteractionModule> logger) : InteractionModuleBase<SocketInteractionContext>
@@ -33,6 +34,7 @@ public sealed class InteractionModule(
     private readonly InitialSetupService _initialSetupService = initialSetupService;
     private readonly ProjectService _projectService = projectService;
     private readonly NotificationService _notificationService = notificationService;
+    private readonly TaskEventService _taskEventService = taskEventService;
     private readonly StudioTimeService _studioTime = studioTime;
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ILogger<InteractionModule> _logger = logger;
@@ -306,6 +308,7 @@ public sealed class InteractionModule(
         db.TaskItems.Add(taskItem);
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordCreatedAsync(taskItem, Context.User.Id, TaskEventType.Created, "backlog_add");
 
         var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(x => x.Id == projectId);
         if (project is not null)
@@ -375,6 +378,11 @@ public sealed class InteractionModule(
 
         db.TaskItems.AddRange(createdTasks);
         await db.SaveChangesAsync();
+
+        foreach (var task in createdTasks)
+        {
+            await _taskEventService.RecordCreatedAsync(task, Context.User.Id, TaskEventType.Created, "backlog_import");
+        }
 
         var backlogChannel = ResolveBacklogChannel(Context.Guild, project.ChannelId);
         var postedCards = 0;
@@ -604,6 +612,8 @@ public sealed class InteractionModule(
             return;
         }
 
+        var beforeSnapshot = TaskEventSnapshot.FromTask(task);
+
         if (hasTitle)
         {
             task.Title = titleRaw!;
@@ -624,6 +634,7 @@ public sealed class InteractionModule(
         }
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedAsync(beforeSnapshot, task, Context.User.Id, TaskEventType.BacklogUpdated, "backlog_edit");
         await _projectService.RefreshDashboardMessageAsync(projectId);
 
         await RespondAsync(
@@ -708,9 +719,11 @@ public sealed class InteractionModule(
             return;
         }
 
+        var beforeSnapshot = TaskEventSnapshot.FromTask(task);
         var taskTitle = task.Title;
         db.TaskItems.Remove(task);
         await db.SaveChangesAsync();
+        await _taskEventService.RecordDeletedAsync(beforeSnapshot, Context.User.Id, "backlog_delete");
         await _projectService.RefreshDashboardMessageAsync(projectId);
 
         await RespondTransientAsync($"Đã xóa task tồn đọng `#{taskId} {Truncate(taskTitle, 60)}`.");
@@ -1015,6 +1028,10 @@ public sealed class InteractionModule(
             .Where(x => x.ProjectId == sprint.ProjectId && x.SprintId == null && taskIds.Contains(x.Id))
             .ToListAsync();
 
+        var beforeSnapshots = tasks
+            .Select(TaskEventSnapshot.FromTask)
+            .ToDictionary(x => x.TaskItemId);
+
         foreach (var task in tasks)
         {
             task.SprintId = sprint.Id;
@@ -1022,6 +1039,11 @@ public sealed class InteractionModule(
         }
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedRangeAsync(
+            tasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.AddedToSprint,
+            "add_tasks_to_sprint");
         await _projectService.RefreshDashboardMessageAsync(sprint.ProjectId);
 
         await RespondTransientAsync($"Đã thêm {tasks.Count} nhiệm vụ vào chu kỳ `{sprint.Name}`.");
@@ -1375,6 +1397,17 @@ public sealed class InteractionModule(
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var claimCandidates = await db.TaskItems
+            .AsNoTracking()
+            .Where(x =>
+                x.ProjectId == projectId &&
+                taskIds.Contains(x.Id) &&
+                x.Type == TaskItemType.Task &&
+                x.Status == TaskItemStatus.Todo &&
+                x.AssigneeId == null)
+            .ToListAsync();
+
+        var claimBeforeSnapshots = claimCandidates.ToDictionary(x => x.Id, TaskEventSnapshot.FromTask);
         var claimedTaskIds = new List<int>();
         foreach (var taskId in taskIds)
         {
@@ -1404,6 +1437,14 @@ public sealed class InteractionModule(
         var tasks = await db.TaskItems
             .Where(x => claimedTaskIds.Contains(x.Id))
             .ToListAsync();
+
+        await _taskEventService.RecordUpdatedRangeAsync(
+            tasks
+                .Where(task => claimBeforeSnapshots.ContainsKey(task.Id))
+                .Select(task => new TaskEventChange(claimBeforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.Claimed,
+            "board_claim");
 
         await _projectService.RefreshDashboardMessageAsync(projectId);
         await _notificationService.NotifyTaskClaimedAsync(projectId, Context.User.Id, tasks);
@@ -1497,6 +1538,10 @@ public sealed class InteractionModule(
                         (x.AssigneeId == null || x.AssigneeId == Context.User.Id))
             .ToListAsync();
 
+        var beforeSnapshots = tasks
+            .Select(TaskEventSnapshot.FromTask)
+            .ToDictionary(x => x.TaskItemId);
+
         foreach (var task in tasks)
         {
             task.AssigneeId = Context.User.Id;
@@ -1504,6 +1549,11 @@ public sealed class InteractionModule(
         }
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedRangeAsync(
+            tasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.Started,
+            "tasks_start");
         await _projectService.RefreshDashboardMessageAsync(projectId);
 
         await RespondTransientAsync($"Đã chuyển {tasks.Count} nhiệm vụ sang trạng thái Đang Làm.");
@@ -1535,12 +1585,21 @@ public sealed class InteractionModule(
             return;
         }
 
+        var beforeSnapshots = tasks
+            .Select(TaskEventSnapshot.FromTask)
+            .ToDictionary(x => x.TaskItemId);
+
         foreach (var task in tasks)
         {
             task.Status = TaskItemStatus.Done;
         }
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedRangeAsync(
+            tasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.Completed,
+            "tasks_done");
 
         var xp = tasks.Sum(x => Math.Max(10, x.Points * 10));
         var totalXp = await _projectService.AwardXpAsync(Context.User.Id, xp);
@@ -1593,6 +1652,7 @@ public sealed class InteractionModule(
 
         db.TaskItems.Add(bugTask);
         await db.SaveChangesAsync();
+        await _taskEventService.RecordCreatedAsync(bugTask, Context.User.Id, TaskEventType.BugReported, "bug_report");
 
         var bugChannel = Context.Guild.GetTextChannel(project.BugChannelId);
         if (bugChannel is null)
@@ -1636,6 +1696,16 @@ public sealed class InteractionModule(
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
+        var beforeBug = await db.TaskItems
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
+
+        if (beforeBug is null)
+        {
+            await RespondAsync("Không tìm thấy lỗi.", ephemeral: true);
+            return;
+        }
+
         var affected = await db.TaskItems
             .Where(x =>
                 x.Id == bugTaskId &&
@@ -1674,6 +1744,12 @@ public sealed class InteractionModule(
 
         var bug = await db.TaskItems.AsNoTracking()
             .FirstAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
+        await _taskEventService.RecordUpdatedAsync(
+            TaskEventSnapshot.FromTask(beforeBug),
+            TaskEventSnapshot.FromTask(bug),
+            Context.User.Id,
+            TaskEventType.BugClaimed,
+            "bug_claim");
         var embed = BuildBugStateEmbed(bug, "Đang Xử Lý", Color.Orange, Context.User.Id);
         if (Context.Interaction is SocketMessageComponent component)
         {
@@ -1694,23 +1770,23 @@ public sealed class InteractionModule(
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
-        var bug = await db.TaskItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
-        if (bug is null)
+        var beforeBug = await db.TaskItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
+        if (beforeBug is null)
         {
             await RespondAsync("Không tìm thấy lỗi.", ephemeral: true);
             return;
         }
 
-        if (bug.Status == TaskItemStatus.Done)
+        if (beforeBug.Status == TaskItemStatus.Done)
         {
             await RespondAsync("Lỗi này đã được sửa xong trước đó.", ephemeral: true);
             return;
         }
 
         var isAdmin = IsLeadOrAdmin();
-        if (bug.AssigneeId.HasValue && bug.AssigneeId != Context.User.Id && !isAdmin)
+        if (beforeBug.AssigneeId.HasValue && beforeBug.AssigneeId != Context.User.Id && !isAdmin)
         {
-            await RespondAsync($"Chỉ người xử lý <@{bug.AssigneeId}> hoặc Trưởng nhóm/Quản trị mới có thể đóng lỗi này.", ephemeral: true);
+            await RespondAsync($"Chỉ người xử lý <@{beforeBug.AssigneeId}> hoặc Trưởng nhóm/Quản trị mới có thể đóng lỗi này.", ephemeral: true);
             return;
         }
 
@@ -1733,7 +1809,13 @@ public sealed class InteractionModule(
             return;
         }
 
-        bug = await db.TaskItems.AsNoTracking().FirstAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
+        var bug = await db.TaskItems.AsNoTracking().FirstAsync(x => x.Id == bugTaskId && x.Type == TaskItemType.Bug);
+        await _taskEventService.RecordUpdatedAsync(
+            TaskEventSnapshot.FromTask(beforeBug),
+            TaskEventSnapshot.FromTask(bug),
+            Context.User.Id,
+            TaskEventType.BugFixed,
+            "bug_fixed");
 
         var xpAward = Math.Max(20, bug.Points * 5);
         var totalXp = await _projectService.AwardXpAsync(Context.User.Id, xpAward);
@@ -1778,6 +1860,9 @@ public sealed class InteractionModule(
 
         var doneTasks = sprintTasks.Where(x => x.Status == TaskItemStatus.Done).ToList();
         var unfinishedTasks = sprintTasks.Where(x => x.Status != TaskItemStatus.Done).ToList();
+        var beforeSnapshots = unfinishedTasks
+            .Select(TaskEventSnapshot.FromTask)
+            .ToDictionary(x => x.TaskItemId);
 
         var velocity = doneTasks.Sum(x => x.Points);
         foreach (var task in unfinishedTasks)
@@ -1791,6 +1876,11 @@ public sealed class InteractionModule(
         sprint.EndedAtUtc = DateTimeOffset.UtcNow;
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedRangeAsync(
+            unfinishedTasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.ReturnedToBacklog,
+            "end_sprint");
         await _projectService.RefreshDashboardMessageAsync(project.Id);
         await _notificationService.NotifySprintEndedAsync(
             project.Id,
@@ -1837,6 +1927,9 @@ public sealed class InteractionModule(
 
         var doneTasks = sprintTasks.Where(x => x.Status == TaskItemStatus.Done).ToList();
         var unfinishedTasks = sprintTasks.Where(x => x.Status != TaskItemStatus.Done).ToList();
+        var beforeSnapshots = unfinishedTasks
+            .Select(TaskEventSnapshot.FromTask)
+            .ToDictionary(x => x.TaskItemId);
 
         var velocity = doneTasks.Sum(x => x.Points);
         foreach (var task in unfinishedTasks)
@@ -1850,6 +1943,11 @@ public sealed class InteractionModule(
         sprint.EndedAtUtc = DateTimeOffset.UtcNow;
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedRangeAsync(
+            unfinishedTasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.ReturnedToBacklog,
+            "admin_end_sprint");
         await _projectService.RefreshDashboardMessageAsync(projectId);
         await _notificationService.NotifySprintEndedAsync(
             projectId,
@@ -1998,6 +2096,8 @@ public sealed class InteractionModule(
             return;
         }
 
+        var beforeSnapshot = TaskEventSnapshot.FromTask(task);
+
         task.AssigneeId = assigneeId;
         if (task.Status != TaskItemStatus.Done)
         {
@@ -2005,6 +2105,7 @@ public sealed class InteractionModule(
         }
 
         await db.SaveChangesAsync();
+        await _taskEventService.RecordUpdatedAsync(beforeSnapshot, task, Context.User.Id, TaskEventType.Assigned, "assign_task");
         await _projectService.RefreshDashboardMessageAsync(projectId);
         await _notificationService.NotifyTaskAssignedAsync(projectId, Context.User.Id, assigneeId, task);
 
@@ -3141,6 +3242,7 @@ public sealed class ProjectCommandModule(
 public sealed class TestCommandModule(
     ProjectService projectService,
     ProjectDailyLeadReportService projectDailyLeadReportService,
+    ProjectWeeklyReviewService projectWeeklyReviewService,
     NotificationService notificationService,
     IDbContextFactory<BotDbContext> dbContextFactory) : InteractionModuleBase<SocketInteractionContext>
 {
@@ -3148,6 +3250,7 @@ public sealed class TestCommandModule(
 
     private readonly ProjectService _projectService = projectService;
     private readonly ProjectDailyLeadReportService _projectDailyLeadReportService = projectDailyLeadReportService;
+    private readonly ProjectWeeklyReviewService _projectWeeklyReviewService = projectWeeklyReviewService;
     private readonly NotificationService _notificationService = notificationService;
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
 
@@ -3292,6 +3395,40 @@ public sealed class TestCommandModule(
 
         await FollowupAsync(
             $"Đã gửi daily lead report cho dự án `{project.Name}` tại {targetChannelText}.",
+            ephemeral: true);
+    }
+
+    [SlashCommand("weekly-review", "Gửi weekly review ngay để kiểm thử.")]
+    public async Task TestWeeklyReviewAsync(int? projectId = null)
+    {
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể chạy lệnh kiểm thử nhắc việc.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+
+        var project = await ResolveProjectAsync(projectId);
+        if (project is null)
+        {
+            await FollowupAsync("Không tìm thấy ngữ cảnh dự án.", ephemeral: true);
+            return;
+        }
+
+        var sent = await _projectWeeklyReviewService.SendWeeklyReviewAsync(project.Id);
+        if (!sent)
+        {
+            await FollowupAsync("Không thể dựng hoặc gửi weekly review cho dự án hiện tại.", ephemeral: true);
+            return;
+        }
+
+        var targetChannelText = project.GlobalNotificationChannelId.HasValue
+            ? $"<#{project.GlobalNotificationChannelId.Value}>"
+            : "`task-feed của project`";
+
+        await FollowupAsync(
+            $"Đã gửi weekly review cho dự án `{project.Name}` tại {targetChannelText}.",
             ephemeral: true);
     }
 

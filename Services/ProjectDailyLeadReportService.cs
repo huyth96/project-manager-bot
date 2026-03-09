@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Discord;
 using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Data;
@@ -13,9 +12,6 @@ public sealed class ProjectDailyLeadReportService(
     StudioTimeService studioTime,
     ILogger<ProjectDailyLeadReportService> logger)
 {
-    private static readonly Regex TaskIdRegex = new(@"#(?<id>\d+)", RegexOptions.Compiled);
-    private static readonly Regex UserMentionRegex = new(@"<@!?(?<id>\d+)>", RegexOptions.Compiled);
-
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ProjectInsightService _projectInsightService = projectInsightService;
     private readonly NotificationService _notificationService = notificationService;
@@ -76,15 +72,12 @@ public sealed class ProjectDailyLeadReportService(
                 .OrderByDescending(x => x.Id)
                 .ToList();
 
-            var todayMemoryMessages = await db.ProjectMemoryMessages
+            var todayTaskEvents = await db.TaskEvents
                 .AsNoTracking()
                 .Where(x => x.ProjectId == projectId && x.LocalDate == _studioTime.LocalDate)
-                .ToListAsync(cancellationToken);
-
-            todayMemoryMessages = todayMemoryMessages
-                .OrderByDescending(x => x.CreatedAtUtc)
+                .OrderByDescending(x => x.OccurredAtUtc)
                 .ThenByDescending(x => x.Id)
-                .ToList();
+                .ToListAsync(cancellationToken);
 
             var todayDigest = context.Memory.DailyDigests
                 .FirstOrDefault(x => x.Date.Date == _studioTime.LocalDate.Date);
@@ -104,7 +97,7 @@ public sealed class ProjectDailyLeadReportService(
                 .AddField("📈 Tình Trạng Sprint", BuildSprintSection(context), false)
                 .AddField("🧾 Kỷ Luật Standup", BuildStandupSection(context, todayStandups), false)
                 .AddField("🚨 Task Cần Chú Ý", BuildAttentionSection(context), false)
-                .AddField("🔄 Biến Động Hôm Nay", BuildDailyChangesSection(createdToday, todayMemoryMessages), false)
+                .AddField("🔄 Biến Động Hôm Nay", BuildDailyChangesSection(createdToday, todayTaskEvents), false)
                 .AddField("💬 Tín Hiệu Từ Chat", BuildChatSignalsSection(todayDigest), false)
                 .AddField("🎯 Hành Động Ngay", BuildActionSection(context, todayStandups), false)
                 .WithFooter("Thiếu báo cáo được suy ra từ task đang mở, lịch sử standup và hoạt động gần đây trong project.")
@@ -235,30 +228,33 @@ public sealed class ProjectDailyLeadReportService(
 
     private static string BuildDailyChangesSection(
         IReadOnlyList<TaskItem> createdToday,
-        IReadOnlyList<ProjectMemoryMessage> todayMemoryMessages)
+        IReadOnlyList<TaskEvent> todayTaskEvents)
     {
         var newTasks = createdToday.Where(x => x.Type == TaskItemType.Task).Take(5).ToList();
         var newBugs = createdToday.Where(x => x.Type == TaskItemType.Bug).Take(5).ToList();
 
-        var completionMessages = todayMemoryMessages
-            .Where(x => x.IsBot && x.NormalizedContent.Contains("hoan thanh nhiem vu", StringComparison.Ordinal))
-            .ToList();
-        var assignmentMessages = todayMemoryMessages
-            .Where(x =>
-                x.IsBot &&
-                (x.NormalizedContent.Contains("giao nhiem vu", StringComparison.Ordinal) ||
-                 x.NormalizedContent.Contains("nhan nhiem vu", StringComparison.Ordinal)))
-            .ToList();
-        var fixedBugMessages = todayMemoryMessages
-            .Where(x =>
-                x.IsBot &&
-                (x.NormalizedContent.Contains("dong loi", StringComparison.Ordinal) ||
-                 x.NormalizedContent.Contains("loi da duoc xu ly", StringComparison.Ordinal)))
+        var completedTaskIds = todayTaskEvents
+            .Where(x => x.TaskType == TaskItemType.Task && x.EventType == TaskEventType.Completed)
+            .Select(x => x.TaskItemId)
+            .Distinct()
+            .Take(5)
             .ToList();
 
-        var completedTaskIds = ExtractDistinctTaskIds(completionMessages.Select(x => x.Content));
-        var fixedBugIds = ExtractDistinctTaskIds(fixedBugMessages.Select(x => x.Content));
-        var assigneeIds = ExtractPrimaryAssigneeIds(assignmentMessages.Select(x => x.Content)).Take(5).ToList();
+        var fixedBugIds = todayTaskEvents
+            .Where(x => x.TaskType == TaskItemType.Bug && x.EventType == TaskEventType.BugFixed)
+            .Select(x => x.TaskItemId)
+            .Distinct()
+            .Take(5)
+            .ToList();
+
+        var assigneeIds = todayTaskEvents
+            .Where(x => x.TaskType == TaskItemType.Task)
+            .Where(x => x.EventType is TaskEventType.Assigned or TaskEventType.Claimed or TaskEventType.Started)
+            .Where(x => x.ToAssigneeId.HasValue)
+            .Select(x => x.ToAssigneeId!.Value)
+            .Distinct()
+            .Take(5)
+            .ToList();
 
         var lines = new List<string>
         {
@@ -385,32 +381,6 @@ public sealed class ProjectDailyLeadReportService(
     private static string FormatTaskRef(AssistantAttentionItem item)
     {
         return item.TaskId.HasValue ? $"#{item.TaskId.Value}" : Truncate(item.Title, 24);
-    }
-
-    private static List<int> ExtractDistinctTaskIds(IEnumerable<string> texts)
-    {
-        return texts
-            .SelectMany(text => TaskIdRegex.Matches(text).Select(match => int.Parse(match.Groups["id"].Value)))
-            .Distinct()
-            .Take(6)
-            .ToList();
-    }
-
-    private static List<ulong> ExtractPrimaryAssigneeIds(IEnumerable<string> texts)
-    {
-        return texts
-            .Select(text =>
-            {
-                var ids = UserMentionRegex.Matches(text)
-                    .Select(match => ulong.Parse(match.Groups["id"].Value))
-                    .ToList();
-
-                return ids.Count == 0 ? (ulong?)null : ids[^1];
-            })
-            .Where(x => x.HasValue)
-            .Select(x => x!.Value)
-            .Distinct()
-            .ToList();
     }
 
     private static string Truncate(string value, int maxLength)

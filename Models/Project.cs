@@ -15,6 +15,7 @@ public sealed class Project
 
     public DateTime? LastStandupDateLocal { get; set; }
     public DateTime? LastLeadReportDateLocal { get; set; }
+    public DateTime? LastWeeklyReviewDateLocal { get; set; }
 
     public ICollection<Sprint> Sprints { get; set; } = new List<Sprint>();
     public ICollection<TaskItem> TaskItems { get; set; } = new List<TaskItem>();

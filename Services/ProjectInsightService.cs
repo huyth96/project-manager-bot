@@ -12,6 +12,7 @@ public sealed class ProjectInsightService(
     IDbContextFactory<BotDbContext> dbContextFactory,
     ProjectService projectService,
     ProjectMemoryService projectMemoryService,
+    ProjectKnowledgeService projectKnowledgeService,
     StudioTimeService studioTime,
     IOptions<AssistantOptions> options,
     ILogger<ProjectInsightService> logger)
@@ -21,11 +22,13 @@ public sealed class ProjectInsightService(
     private const int StalledInProgressThresholdDays = 3;
     private const int StalledNotStartedThresholdDays = 2;
     private const int NonSprintStalledThresholdDays = 5;
+    private const int TaskHistoryLookbackDays = 14;
     private static readonly TimeSpan StandupDueTime = new(9, 30, 0);
 
     private readonly IDbContextFactory<BotDbContext> _dbContextFactory = dbContextFactory;
     private readonly ProjectService _projectService = projectService;
     private readonly ProjectMemoryService _projectMemoryService = projectMemoryService;
+    private readonly ProjectKnowledgeService _projectKnowledgeService = projectKnowledgeService;
     private readonly StudioTimeService _studioTime = studioTime;
     private readonly AssistantOptions _options = options.Value;
     private readonly ILogger<ProjectInsightService> _logger = logger;
@@ -153,23 +156,42 @@ public sealed class ProjectInsightService(
             .OrderBy(x => x.Id)
             .ToListAsync(cancellationToken);
 
+        var latestTaskEventsByTaskId = await LoadLatestTaskEventsByTaskIdAsync(
+            db,
+            project.Id,
+            openProjectTasks.Select(x => x.Id).ToList(),
+            cancellationToken);
+        var recentTaskEvents = await LoadRecentTaskEventsAsync(db, project.Id, cancellationToken);
+
+        var taskFlow = BuildTaskFlowSummary(recentTaskEvents);
+        var memberWorkloads = BuildMemberWorkloads(openProjectTasks, openBugs, recentTaskEvents);
+        var stalledTasks = BuildStalledTasks(activeSprint, sprintTasks, openProjectTasks, latestTaskEventsByTaskId);
         var sprintSnapshot = BuildSprintSnapshot(activeSprint, sprintTasks, backlogCount, openBugs.Count);
         var recentStandups = await LoadRecentStandupsAsync(db, project.Id, cancellationToken);
         var standupDiscipline = await BuildStandupDisciplineAsync(db, project.Id, cancellationToken);
-        var stalledTasks = BuildStalledTasks(activeSprint, sprintTasks, openProjectTasks);
         var attentionItems = BuildAttentionItems(
             activeSprint,
             sprintTasks,
             openBugs,
             recentStandups,
             standupDiscipline,
-            stalledTasks);
+            stalledTasks,
+            memberWorkloads);
         var memory = await _projectMemoryService.BuildMemoryAsync(
             project.Id,
             currentChannelId: currentChannelId,
             currentThreadId: currentThreadId,
             excludedMessageId: excludedMessageId,
             question: question,
+            cancellationToken);
+        var knowledge = await _projectKnowledgeService.BuildKnowledgeAsync(
+            project.Id,
+            sprintSnapshot,
+            recentStandups,
+            standupDiscipline,
+            memberWorkloads,
+            stalledTasks,
+            attentionItems,
             cancellationToken);
 
         return new ProjectAssistantContext(
@@ -178,10 +200,51 @@ public sealed class ProjectInsightService(
             Sprint: sprintSnapshot,
             Standups: recentStandups,
             StandupDiscipline: standupDiscipline,
+            TaskFlow: taskFlow,
+            MemberWorkloads: memberWorkloads,
             StalledTasks: stalledTasks,
             AttentionItems: attentionItems.Take(Math.Max(1, _options.MaxAttentionItems)).ToList(),
             RecentConversation: recentConversation,
-            Memory: memory);
+            Memory: memory,
+            Knowledge: knowledge);
+    }
+
+    private async Task<Dictionary<int, TaskEvent>> LoadLatestTaskEventsByTaskIdAsync(
+        BotDbContext db,
+        int projectId,
+        IReadOnlyCollection<int> taskIds,
+        CancellationToken cancellationToken)
+    {
+        if (taskIds.Count == 0)
+        {
+            return [];
+        }
+
+        var events = await db.TaskEvents
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId && taskIds.Contains(x.TaskItemId))
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        return events
+            .GroupBy(x => x.TaskItemId)
+            .ToDictionary(x => x.Key, x => x.First());
+    }
+
+    private async Task<List<TaskEvent>> LoadRecentTaskEventsAsync(
+        BotDbContext db,
+        int projectId,
+        CancellationToken cancellationToken)
+    {
+        var fromDate = _studioTime.LocalDate.AddDays(-(TaskHistoryLookbackDays - 1));
+
+        return await db.TaskEvents
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.LocalDate >= fromDate)
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.Id)
+            .ToListAsync(cancellationToken);
     }
 
     private async Task<List<AssistantStandupEntry>> LoadRecentStandupsAsync(
@@ -201,13 +264,18 @@ public sealed class ProjectInsightService(
         return reports
             .OrderByDescending(x => x.LocalDate)
             .ThenBy(x => x.DiscordUserId)
-            .Select(x => new AssistantStandupEntry(
-                Date: x.LocalDate,
-                DiscordUserId: x.DiscordUserId,
-                Yesterday: TrimForPrompt(x.Yesterday, 180),
-                Today: TrimForPrompt(x.Today, 180),
-                Blockers: TrimForPrompt(x.Blockers, 180),
-                HasBlockers: HasMeaningfulBlockers(x.Blockers)))
+            .Select(x =>
+            {
+                var reportedAtLocal = TimeZoneInfo.ConvertTime(x.ReportedAtUtc, _studioTime.TimeZone);
+                return new AssistantStandupEntry(
+                    Date: x.LocalDate,
+                    DiscordUserId: x.DiscordUserId,
+                    ReportedAtLocal: reportedAtLocal,
+                    Yesterday: TrimForPrompt(x.Yesterday, 180),
+                    Today: TrimForPrompt(x.Today, 180),
+                    Blockers: TrimForPrompt(x.Blockers, 180),
+                    HasBlockers: HasMeaningfulBlockers(x.Blockers));
+            })
             .ToList();
     }
 
@@ -428,7 +496,8 @@ public sealed class ProjectInsightService(
         IReadOnlyCollection<TaskItem> openBugs,
         IReadOnlyCollection<AssistantStandupEntry> recentStandups,
         AssistantStandupDisciplineSummary standupDiscipline,
-        IReadOnlyCollection<AssistantStalledTask> stalledTasks)
+        IReadOnlyCollection<AssistantStalledTask> stalledTasks,
+        IReadOnlyCollection<AssistantMemberWorkload> memberWorkloads)
     {
         var items = new List<AssistantAttentionItem>();
 
@@ -545,6 +614,19 @@ public sealed class ProjectInsightService(
                     Points: null,
                     AssigneeId: x.DiscordUserId)));
 
+        items.AddRange(
+            memberWorkloads
+                .Where(x => x.OpenPoints >= 8 || x.OpenTaskCount >= 3 || x.OpenBugCount >= 2)
+                .Take(3)
+                .Select(x => new AssistantAttentionItem(
+                    Kind: "member_workload",
+                    Title: $"<@{x.DiscordUserId}> dang giu workload cao",
+                    Summary: $"{x.OpenTaskCount} task mo, {x.OpenPoints} diem, {x.OpenBugCount} bug, {x.RecentActivityCount} cap nhat gan day",
+                    TaskId: null,
+                    Status: null,
+                    Points: x.OpenPoints,
+                    AssigneeId: x.DiscordUserId)));
+
         return items
             .DistinctBy(x => $"{x.Kind}:{x.TaskId}:{x.Title}")
             .ToList();
@@ -553,7 +635,8 @@ public sealed class ProjectInsightService(
     private List<AssistantStalledTask> BuildStalledTasks(
         Sprint? activeSprint,
         IReadOnlyCollection<TaskItem> sprintTasks,
-        IReadOnlyCollection<TaskItem> openProjectTasks)
+        IReadOnlyCollection<TaskItem> openProjectTasks,
+        IReadOnlyDictionary<int, TaskEvent> latestTaskEventsByTaskId)
     {
         var candidateTasks = (activeSprint is not null ? sprintTasks : openProjectTasks)
             .Where(x => x.Type == TaskItemType.Task && x.Status != TaskItemStatus.Done)
@@ -563,11 +646,17 @@ public sealed class ProjectInsightService(
         var sprintOverdue = activeSprint is not null && IsSprintOverdue(activeSprint);
 
         return candidateTasks
-            .Select(task => BuildStalledTask(task, activeSprint is not null, scheduleProgress, sprintOverdue))
+            .Select(task => BuildStalledTask(
+                task,
+                activeSprint is not null,
+                scheduleProgress,
+                sprintOverdue,
+                latestTaskEventsByTaskId.TryGetValue(task.Id, out var latestEvent) ? latestEvent : null))
             .Where(x => x is not null)
             .Select(x => x!)
             .OrderByDescending(x => x.IsOverdue)
             .ThenByDescending(x => x.Status == nameof(TaskItemStatus.InProgress))
+            .ThenByDescending(x => x.DaysWithoutChange)
             .ThenByDescending(x => x.AgeDays)
             .ThenByDescending(x => x.Points)
             .ThenBy(x => x.TaskId)
@@ -579,11 +668,19 @@ public sealed class ProjectInsightService(
         TaskItem task,
         bool hasActiveSprint,
         double scheduleProgress,
-        bool sprintOverdue)
+        bool sprintOverdue,
+        TaskEvent? latestTaskEvent)
     {
         var createdAtLocal = TimeZoneInfo.ConvertTime(task.CreatedAtUtc, _studioTime.TimeZone);
         var age = _studioTime.LocalNow - createdAtLocal;
         var ageDays = Math.Max(0, (int)Math.Floor(age.TotalDays));
+        var lastChangedLocal = latestTaskEvent is null
+            ? createdAtLocal
+            : ConvertUtcDateTimeToLocal(latestTaskEvent.OccurredAtUtc);
+        var daysWithoutChange = Math.Max(0, (int)Math.Floor((_studioTime.LocalNow - lastChangedLocal).TotalDays));
+        var evidence = latestTaskEvent is null
+            ? $"Chua co task event, tam dung CreatedAt {createdAtLocal:yyyy-MM-dd HH:mm}"
+            : $"Lan thay doi gan nhat: {FormatTaskEventType(latestTaskEvent.EventType)} luc {lastChangedLocal:yyyy-MM-dd HH:mm}";
 
         if (sprintOverdue)
         {
@@ -594,11 +691,13 @@ public sealed class ProjectInsightService(
                 Points: task.Points,
                 AssigneeId: task.AssigneeId,
                 AgeDays: ageDays,
+                DaysWithoutChange: daysWithoutChange,
                 Reason: "Sprint đã quá hạn nhưng task chưa hoàn thành",
-                IsOverdue: true);
+                IsOverdue: true,
+                Evidence: evidence);
         }
 
-        if (task.Status == TaskItemStatus.InProgress && age.TotalDays >= StalledInProgressThresholdDays)
+        if (task.Status == TaskItemStatus.InProgress && daysWithoutChange >= StalledInProgressThresholdDays)
         {
             return new AssistantStalledTask(
                 TaskId: task.Id,
@@ -607,14 +706,16 @@ public sealed class ProjectInsightService(
                 Points: task.Points,
                 AssigneeId: task.AssigneeId,
                 AgeDays: ageDays,
+                DaysWithoutChange: daysWithoutChange,
                 Reason: $"Đang làm hơn {StalledInProgressThresholdDays} ngày mà chưa xong",
-                IsOverdue: false);
+                IsOverdue: false,
+                Evidence: evidence);
         }
 
         if (hasActiveSprint &&
             task.Status is TaskItemStatus.Todo or TaskItemStatus.Backlog &&
             scheduleProgress >= 0.5 &&
-            age.TotalDays >= StalledNotStartedThresholdDays)
+            daysWithoutChange >= StalledNotStartedThresholdDays)
         {
             return new AssistantStalledTask(
                 TaskId: task.Id,
@@ -623,13 +724,15 @@ public sealed class ProjectInsightService(
                 Points: task.Points,
                 AssigneeId: task.AssigneeId,
                 AgeDays: ageDays,
+                DaysWithoutChange: daysWithoutChange,
                 Reason: "Đã qua nửa sprint nhưng task vẫn chưa bắt đầu",
-                IsOverdue: false);
+                IsOverdue: false,
+                Evidence: evidence);
         }
 
         if (!hasActiveSprint &&
             task.Status == TaskItemStatus.InProgress &&
-            age.TotalDays >= NonSprintStalledThresholdDays)
+            daysWithoutChange >= NonSprintStalledThresholdDays)
         {
             return new AssistantStalledTask(
                 TaskId: task.Id,
@@ -638,11 +741,117 @@ public sealed class ProjectInsightService(
                 Points: task.Points,
                 AssigneeId: task.AssigneeId,
                 AgeDays: ageDays,
+                DaysWithoutChange: daysWithoutChange,
                 Reason: $"Task đã mở hơn {NonSprintStalledThresholdDays} ngày mà chưa hoàn thành",
-                IsOverdue: false);
+                IsOverdue: false,
+                Evidence: evidence);
         }
 
         return null;
+    }
+
+    private AssistantTaskFlowSummary BuildTaskFlowSummary(IReadOnlyCollection<TaskEvent> recentTaskEvents)
+    {
+        var topActors = recentTaskEvents
+            .Where(x => x.ActorDiscordId.HasValue)
+            .GroupBy(x => x.ActorDiscordId!.Value)
+            .Select(group => new AssistantTaskActorSummary(
+                DiscordUserId: group.Key,
+                EventCount: group.Count(),
+                CompletedTasks: group.Where(x => x.TaskType == TaskItemType.Task && x.EventType == TaskEventType.Completed).Select(x => x.TaskItemId).Distinct().Count(),
+                FixedBugs: group.Where(x => x.TaskType == TaskItemType.Bug && x.EventType == TaskEventType.BugFixed).Select(x => x.TaskItemId).Distinct().Count(),
+                ClaimedOrAssignedTasks: group.Count(x => x.EventType is TaskEventType.Claimed or TaskEventType.Assigned or TaskEventType.Started or TaskEventType.BugClaimed)))
+            .OrderByDescending(x => x.EventCount)
+            .ThenByDescending(x => x.CompletedTasks)
+            .ThenByDescending(x => x.FixedBugs)
+            .ThenBy(x => x.DiscordUserId)
+            .Take(5)
+            .ToList();
+
+        return new AssistantTaskFlowSummary(
+            LookbackDays: TaskHistoryLookbackDays,
+            TotalEvents: recentTaskEvents.Count,
+            CreatedTasks: recentTaskEvents.Count(x => x.TaskType == TaskItemType.Task && x.EventType == TaskEventType.Created),
+            CompletedTasks: recentTaskEvents.Where(x => x.TaskType == TaskItemType.Task && x.EventType == TaskEventType.Completed).Select(x => x.TaskItemId).Distinct().Count(),
+            CreatedBugs: recentTaskEvents.Count(x => x.TaskType == TaskItemType.Bug && x.EventType == TaskEventType.BugReported),
+            FixedBugs: recentTaskEvents.Where(x => x.TaskType == TaskItemType.Bug && x.EventType == TaskEventType.BugFixed).Select(x => x.TaskItemId).Distinct().Count(),
+            ReturnedToBacklog: recentTaskEvents.Where(x => x.EventType == TaskEventType.ReturnedToBacklog).Select(x => x.TaskItemId).Distinct().Count(),
+            TopActors: topActors);
+    }
+
+    private List<AssistantMemberWorkload> BuildMemberWorkloads(
+        IReadOnlyCollection<TaskItem> openProjectTasks,
+        IReadOnlyCollection<TaskItem> openBugs,
+        IReadOnlyCollection<TaskEvent> recentTaskEvents)
+    {
+        var taskGroups = openProjectTasks
+            .Where(x => x.AssigneeId.HasValue)
+            .GroupBy(x => x.AssigneeId!.Value)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var bugGroups = openBugs
+            .Where(x => x.AssigneeId.HasValue)
+            .GroupBy(x => x.AssigneeId!.Value)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var recentActivityByActor = recentTaskEvents
+            .Where(x => x.ActorDiscordId.HasValue)
+            .GroupBy(x => x.ActorDiscordId!.Value)
+            .ToDictionary(x => x.Key, x => x.Count());
+
+        return taskGroups.Keys
+            .Union(bugGroups.Keys)
+            .Select(discordUserId =>
+            {
+                taskGroups.TryGetValue(discordUserId, out var memberTasks);
+                bugGroups.TryGetValue(discordUserId, out var memberBugs);
+                recentActivityByActor.TryGetValue(discordUserId, out var activityCount);
+
+                memberTasks ??= [];
+                memberBugs ??= [];
+
+                return new AssistantMemberWorkload(
+                    DiscordUserId: discordUserId,
+                    OpenTaskCount: memberTasks.Count,
+                    InProgressTaskCount: memberTasks.Count(x => x.Status == TaskItemStatus.InProgress),
+                    OpenBugCount: memberBugs.Count,
+                    OpenPoints: memberTasks.Sum(x => x.Points),
+                    RecentActivityCount: activityCount);
+            })
+            .OrderByDescending(x => x.OpenPoints)
+            .ThenByDescending(x => x.OpenTaskCount)
+            .ThenByDescending(x => x.OpenBugCount)
+            .ThenByDescending(x => x.RecentActivityCount)
+            .ThenBy(x => x.DiscordUserId)
+            .Take(8)
+            .ToList();
+    }
+
+    private DateTimeOffset ConvertUtcDateTimeToLocal(DateTime utcDateTime)
+    {
+        var utc = DateTime.SpecifyKind(utcDateTime, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTime(new DateTimeOffset(utc), _studioTime.TimeZone);
+    }
+
+    private static string FormatTaskEventType(TaskEventType eventType)
+    {
+        return eventType switch
+        {
+            TaskEventType.Created => "tao task",
+            TaskEventType.BacklogUpdated => "cap nhat backlog",
+            TaskEventType.AddedToSprint => "them vao sprint",
+            TaskEventType.Claimed => "nhan task",
+            TaskEventType.Started => "bat dau",
+            TaskEventType.Completed => "hoan thanh",
+            TaskEventType.Assigned => "giao task",
+            TaskEventType.BugReported => "bao bug",
+            TaskEventType.BugClaimed => "nhan bug",
+            TaskEventType.BugFixed => "dong bug",
+            TaskEventType.ReturnedToBacklog => "tra ve backlog",
+            TaskEventType.Deleted => "xoa task",
+            TaskEventType.SeededForTest => "cap nhat test",
+            _ => eventType.ToString()
+        };
     }
 
     private AssistantSprintSnapshot BuildSprintSnapshot(
@@ -877,10 +1086,13 @@ public sealed record ProjectAssistantContext(
     AssistantSprintSnapshot Sprint,
     IReadOnlyList<AssistantStandupEntry> Standups,
     AssistantStandupDisciplineSummary StandupDiscipline,
+    AssistantTaskFlowSummary TaskFlow,
+    IReadOnlyList<AssistantMemberWorkload> MemberWorkloads,
     IReadOnlyList<AssistantStalledTask> StalledTasks,
     IReadOnlyList<AssistantAttentionItem> AttentionItems,
     IReadOnlyList<AssistantConversationMessage> RecentConversation,
-    AssistantProjectMemory Memory);
+    AssistantProjectMemory Memory,
+    AssistantProjectKnowledge Knowledge);
 
 public sealed record AssistantScope(
     int ProjectId,
@@ -921,6 +1133,7 @@ public sealed record AssistantHealthSummary(
 public sealed record AssistantStandupEntry(
     DateTime Date,
     ulong DiscordUserId,
+    DateTimeOffset ReportedAtLocal,
     string Yesterday,
     string Today,
     string Blockers,
@@ -951,6 +1164,31 @@ public sealed record AssistantMissingReporter(
     bool MissingToday,
     string BasisSummary);
 
+public sealed record AssistantTaskFlowSummary(
+    int LookbackDays,
+    int TotalEvents,
+    int CreatedTasks,
+    int CompletedTasks,
+    int CreatedBugs,
+    int FixedBugs,
+    int ReturnedToBacklog,
+    IReadOnlyList<AssistantTaskActorSummary> TopActors);
+
+public sealed record AssistantTaskActorSummary(
+    ulong DiscordUserId,
+    int EventCount,
+    int CompletedTasks,
+    int FixedBugs,
+    int ClaimedOrAssignedTasks);
+
+public sealed record AssistantMemberWorkload(
+    ulong DiscordUserId,
+    int OpenTaskCount,
+    int InProgressTaskCount,
+    int OpenBugCount,
+    int OpenPoints,
+    int RecentActivityCount);
+
 public sealed record AssistantStalledTask(
     int TaskId,
     string Title,
@@ -958,8 +1196,10 @@ public sealed record AssistantStalledTask(
     int Points,
     ulong? AssigneeId,
     int AgeDays,
+    int DaysWithoutChange,
     string Reason,
-    bool IsOverdue);
+    bool IsOverdue,
+    string Evidence);
 
 public sealed record AssistantAttentionItem(
     string Kind,
