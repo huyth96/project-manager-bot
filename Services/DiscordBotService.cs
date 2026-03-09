@@ -129,7 +129,7 @@ public sealed class DiscordBotService(
         }
 
         await HandleShowcaseMessageAsync(message);
-        await HandleAssistantMentionAsync(message);
+        _ = Task.Run(() => HandleAssistantMentionSafelyAsync(message));
     }
 
     private async Task HandleShowcaseMessageAsync(SocketUserMessage message)
@@ -190,6 +190,18 @@ public sealed class DiscordBotService(
         await message.Channel.SendMessageAsync(
             text: reply,
             messageReference: new MessageReference(message.Id));
+    }
+
+    private async Task HandleAssistantMentionSafelyAsync(SocketUserMessage message)
+    {
+        try
+        {
+            await HandleAssistantMentionAsync(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Không thể xử lý assistant mention nền cho message {MessageId}", message.Id);
+        }
     }
 
     private Task OnReactionAddedAsync(

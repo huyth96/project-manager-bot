@@ -132,6 +132,7 @@ public sealed class ProjectKnowledgeService(
         ReplaceDateRange(db.MemberDailySignals, db.MemberDailySignals.Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate));
         ReplaceDateRange(db.DecisionLogs, db.DecisionLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
         ReplaceDateRange(db.RiskLogs, db.RiskLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
+        await db.SaveChangesAsync(cancellationToken);
 
         db.TopicMentions.AddRange(topicMentions);
         db.MemberDailySignals.AddRange(memberSignals);
@@ -698,7 +699,10 @@ public sealed class ProjectKnowledgeService(
             return;
         }
 
-        var current = db.SprintDailySnapshots.FirstOrDefault(x => x.ProjectId == projectId && x.SprintId == sprint.SprintId.Value && x.LocalDate == today);
+        var current = db.SprintDailySnapshots
+            .Where(x => x.ProjectId == projectId && x.SprintId == sprint.SprintId.Value && x.LocalDate == today)
+            .OrderByDescending(x => x.Id)
+            .FirstOrDefault();
         if (current is null)
         {
             current = new SprintDailySnapshot { ProjectId = projectId, SprintId = sprint.SprintId.Value, LocalDate = today };
@@ -732,7 +736,10 @@ public sealed class ProjectKnowledgeService(
         IReadOnlyList<AssistantStalledTask> stalledTasks,
         int openBugCount)
     {
-        var current = db.ProjectRiskSnapshots.FirstOrDefault(x => x.ProjectId == projectId && x.LocalDate == today);
+        var current = db.ProjectRiskSnapshots
+            .Where(x => x.ProjectId == projectId && x.LocalDate == today)
+            .OrderByDescending(x => x.Id)
+            .FirstOrDefault();
         if (current is null)
         {
             current = new ProjectRiskSnapshot { ProjectId = projectId, LocalDate = today };
