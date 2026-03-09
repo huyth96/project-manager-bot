@@ -19,6 +19,8 @@ public sealed class MemberProfile
     public int BlockerDays { get; set; }
     public int CompletedTasksRecent { get; set; }
     public int FixedBugsRecent { get; set; }
+    public int CompletedTasksAllTime { get; set; }
+    public int FixedBugsAllTime { get; set; }
     public int OpenTaskCount { get; set; }
     public int OpenBugCount { get; set; }
     public int OpenPoints { get; set; }
@@ -27,6 +29,7 @@ public sealed class MemberProfile
     public string StandupSummary { get; set; } = string.Empty;
     public string CurrentFocusSummary { get; set; } = string.Empty;
     public string RecentOutputSummary { get; set; } = string.Empty;
+    public string HistoricalOutputSummary { get; set; } = string.Empty;
     public string RiskSummary { get; set; } = string.Empty;
     public string EvidenceSummary { get; set; } = string.Empty;
     public DateTime? LastSignalDate { get; set; }

@@ -920,6 +920,7 @@ public sealed class BotAssistantService(
             builder.AppendLine($"  focus: {member.CurrentFocusSummary}");
             builder.AppendLine($"  standup: {member.StandupSummary}");
             builder.AppendLine($"  output: {member.RecentOutputSummary}");
+            builder.AppendLine($"  history: {member.HistoricalOutputSummary}");
             builder.AppendLine($"  risk: {member.RiskSummary}");
         }
     }
@@ -1085,6 +1086,8 @@ public sealed class BotAssistantService(
                     x.BlockerDays,
                     x.CompletedTasksRecent,
                     x.FixedBugsRecent,
+                    x.CompletedTasksAllTime,
+                    x.FixedBugsAllTime,
                     x.OpenTaskCount,
                     x.OpenBugCount,
                     x.OpenPoints,
@@ -1093,6 +1096,7 @@ public sealed class BotAssistantService(
                     x.StandupSummary,
                     x.CurrentFocusSummary,
                     x.RecentOutputSummary,
+                    x.HistoricalOutputSummary,
                     x.RiskSummary,
                     x.EvidenceSummary
                 })

@@ -163,6 +163,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             entity.Property(x => x.StandupSummary).HasMaxLength(500);
             entity.Property(x => x.CurrentFocusSummary).HasMaxLength(700);
             entity.Property(x => x.RecentOutputSummary).HasMaxLength(500);
+            entity.Property(x => x.HistoricalOutputSummary).HasMaxLength(700);
             entity.Property(x => x.RiskSummary).HasMaxLength(500);
             entity.Property(x => x.EvidenceSummary).HasMaxLength(1000);
 

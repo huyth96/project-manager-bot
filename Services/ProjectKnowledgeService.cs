@@ -119,6 +119,24 @@ public sealed class ProjectKnowledgeService(
                 .Where(x => x.ProjectId == projectId)
                 .Select(x => new TaskCreationSeed(x.Id, x.AssigneeId, x.CreatedAtUtc))
                 .ToListAsync(cancellationToken);
+            var sprintNameLookup = await db.Sprints
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId)
+                .ToDictionaryAsync(x => x.Id, x => x.Name, cancellationToken);
+            var completedWorkItems = await db.TaskItems
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.AssigneeId.HasValue && x.Status == TaskItemStatus.Done)
+                .Select(x => new CompletedWorkSeed(
+                    x.AssigneeId!.Value,
+                    x.Type,
+                    x.Id,
+                    x.Title,
+                    x.Points,
+                    x.SprintId))
+                .ToListAsync(cancellationToken);
+            completedWorkItems = completedWorkItems
+                .Where(x => !botUserIds.Contains(x.AssigneeId))
+                .ToList();
 
             var topicMentions = BuildTopicMentions(projectId, topicFromDate, humanMessages, digests)
                 .GroupBy(x => new { x.ProjectId, Date = x.LocalDate.Date, x.TopicKey })
@@ -145,7 +163,17 @@ public sealed class ProjectKnowledgeService(
                 .ToList();
             var decisionLogs = BuildDecisionLogs(projectId, topicFromDate, humanMessages);
             var riskLogs = BuildRiskLogs(projectId, today, humanMessages, filteredStandups, filteredAttentionItems, filteredStalledTasks, displayNameLookup);
-            var memberProfiles = BuildMemberProfiles(projectId, humanMessages, filteredStandups, taskEvents, memberSignals, filteredMemberWorkloads, displayNameLookup, botUserIds);
+            var memberProfiles = BuildMemberProfiles(
+                projectId,
+                humanMessages,
+                filteredStandups,
+                taskEvents,
+                completedWorkItems,
+                sprintNameLookup,
+                memberSignals,
+                filteredMemberWorkloads,
+                displayNameLookup,
+                botUserIds);
 
             ReplaceDateRange(db.TopicMentions, db.TopicMentions.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
             ReplaceDateRange(db.MemberDailySignals, db.MemberDailySignals.Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate));
@@ -362,6 +390,8 @@ public sealed class ProjectKnowledgeService(
         IReadOnlyList<ProjectMemoryMessage> messages,
         IReadOnlyList<AssistantStandupEntry> standups,
         IReadOnlyList<TaskEvent> taskEvents,
+        IReadOnlyList<CompletedWorkSeed> completedWorkItems,
+        IReadOnlyDictionary<int, string> sprintNameLookup,
         IReadOnlyList<MemberDailySignal> memberSignals,
         IReadOnlyList<AssistantMemberWorkload> memberWorkloads,
         IReadOnlyDictionary<ulong, string> displayNameLookup,
@@ -374,9 +404,13 @@ public sealed class ProjectKnowledgeService(
             .Where(x => x.ActorDiscordId.HasValue)
             .GroupBy(x => x.ActorDiscordId!.Value)
             .ToDictionary(x => x.Key, x => x.ToList());
+        var completedWorkGroups = completedWorkItems
+            .GroupBy(x => x.AssigneeId)
+            .ToDictionary(x => x.Key, x => x.ToList());
         var signalGroups = memberSignals.GroupBy(x => x.DiscordUserId).ToDictionary(x => x.Key, x => x.ToList());
         var memberIds = messageGroups.Keys
             .Concat(eventGroups.Keys)
+            .Concat(completedWorkGroups.Keys)
             .Concat(signalGroups.Keys)
             .Concat(workloadsByUser.Keys)
             .Distinct()
@@ -388,6 +422,7 @@ public sealed class ProjectKnowledgeService(
             var memberMessages = messageGroups.GetValueOrDefault(userId) ?? [];
             var memberStandups = standupGroups.GetValueOrDefault(userId) ?? [];
             var memberEvents = eventGroups.GetValueOrDefault(userId) ?? [];
+            var memberCompletedWork = completedWorkGroups.GetValueOrDefault(userId) ?? [];
             var signals = signalGroups.GetValueOrDefault(userId) ?? [];
             var workload = workloadsByUser.GetValueOrDefault(userId);
             var expectedSignals = signals.Where(x => x.ExpectedStandup).ToList();
@@ -403,6 +438,8 @@ public sealed class ProjectKnowledgeService(
             var blockerDays = signals.Count(x => x.HasBlocker);
             var completedTasksRecent = signals.Sum(x => x.CompletedTasks);
             var fixedBugsRecent = signals.Sum(x => x.FixedBugs);
+            var completedTasksAllTime = memberCompletedWork.Count(x => x.TaskType == TaskItemType.Task);
+            var fixedBugsAllTime = memberCompletedWork.Count(x => x.TaskType == TaskItemType.Bug);
             var activeChannels = memberMessages
                 .GroupBy(x => x.ChannelName)
                 .OrderByDescending(x => x.Count())
@@ -417,6 +454,7 @@ public sealed class ProjectKnowledgeService(
             var confidence = Math.Clamp(30 + memberMessages.Count * 3 + memberEvents.Count * 2 + signals.Count * 4, 25, 95);
             var currentFocusSummary = BuildCurrentFocusSummary(memberMessages, memberStandups, memberEvents, workload, dominantTopics);
             var recentOutputSummary = BuildRecentOutputSummary(completedTasksRecent, fixedBugsRecent, memberEvents);
+            var historicalOutputSummary = BuildHistoricalOutputSummary(completedTasksAllTime, fixedBugsAllTime, memberCompletedWork, sprintNameLookup);
             var standupSummary = BuildStandupSummary(expectedSignals.Count, submittedSignals.Count, missingStandupDays, lateSignals.Count, lateRatePercent, averageLateMinutes, blockerDays);
             var riskSummary = BuildMemberRiskSummary(workload, missingStandupDays, lateRatePercent, blockerDays);
 
@@ -438,6 +476,8 @@ public sealed class ProjectKnowledgeService(
                 BlockerDays = blockerDays,
                 CompletedTasksRecent = completedTasksRecent,
                 FixedBugsRecent = fixedBugsRecent,
+                CompletedTasksAllTime = completedTasksAllTime,
+                FixedBugsAllTime = fixedBugsAllTime,
                 OpenTaskCount = workload?.OpenTaskCount ?? 0,
                 OpenBugCount = workload?.OpenBugCount ?? 0,
                 OpenPoints = workload?.OpenPoints ?? 0,
@@ -446,8 +486,9 @@ public sealed class ProjectKnowledgeService(
                 StandupSummary = standupSummary,
                 CurrentFocusSummary = currentFocusSummary,
                 RecentOutputSummary = recentOutputSummary,
+                HistoricalOutputSummary = historicalOutputSummary,
                 RiskSummary = riskSummary,
-                EvidenceSummary = $"{KnowledgeLookbackDays}d window: {memberMessages.Count} messages, {submittedSignals.Count} standups, {memberEvents.Count} task events",
+                EvidenceSummary = $"{KnowledgeLookbackDays}d window: {memberMessages.Count} messages, {submittedSignals.Count} standups, {memberEvents.Count} task events | all-time done {completedTasksAllTime} task, fixed {fixedBugsAllTime} bug",
                 LastSignalDate = signals.OrderByDescending(x => x.LocalDate).FirstOrDefault()?.LocalDate,
                 LastSeenAtUtc = memberMessages.OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault()?.CreatedAtUtc.UtcDateTime,
                 UpdatedAtUtc = DateTime.UtcNow
@@ -698,6 +739,8 @@ public sealed class ProjectKnowledgeService(
             current.BlockerDays = profile.BlockerDays;
             current.CompletedTasksRecent = profile.CompletedTasksRecent;
             current.FixedBugsRecent = profile.FixedBugsRecent;
+            current.CompletedTasksAllTime = profile.CompletedTasksAllTime;
+            current.FixedBugsAllTime = profile.FixedBugsAllTime;
             current.OpenTaskCount = profile.OpenTaskCount;
             current.OpenBugCount = profile.OpenBugCount;
             current.OpenPoints = profile.OpenPoints;
@@ -706,6 +749,7 @@ public sealed class ProjectKnowledgeService(
             current.StandupSummary = profile.StandupSummary;
             current.CurrentFocusSummary = profile.CurrentFocusSummary;
             current.RecentOutputSummary = profile.RecentOutputSummary;
+            current.HistoricalOutputSummary = profile.HistoricalOutputSummary;
             current.RiskSummary = profile.RiskSummary;
             current.EvidenceSummary = profile.EvidenceSummary;
             current.LastSignalDate = profile.LastSignalDate;
@@ -800,6 +844,8 @@ public sealed class ProjectKnowledgeService(
             profile.BlockerDays,
             profile.CompletedTasksRecent,
             profile.FixedBugsRecent,
+            profile.CompletedTasksAllTime,
+            profile.FixedBugsAllTime,
             profile.OpenTaskCount,
             profile.OpenBugCount,
             profile.OpenPoints,
@@ -808,6 +854,7 @@ public sealed class ProjectKnowledgeService(
             profile.StandupSummary,
             profile.CurrentFocusSummary,
             profile.RecentOutputSummary,
+            profile.HistoricalOutputSummary,
             profile.RiskSummary,
             profile.EvidenceSummary);
     }
@@ -984,6 +1031,35 @@ public sealed class ProjectKnowledgeService(
         }
 
         return $"Chua thay output ro trong {KnowledgeLookbackDays}d.";
+    }
+
+    private static string BuildHistoricalOutputSummary(
+        int completedTasksAllTime,
+        int fixedBugsAllTime,
+        IReadOnlyList<CompletedWorkSeed> completedWorkItems,
+        IReadOnlyDictionary<int, string> sprintNameLookup)
+    {
+        if (completedTasksAllTime == 0 && fixedBugsAllTime == 0)
+        {
+            return "Chua thay lich su task/bug done gan cho member nay trong du lieu project hien co.";
+        }
+
+        var notable = completedWorkItems
+            .OrderByDescending(x => x.SprintId ?? 0)
+            .ThenByDescending(x => x.TaskItemId)
+            .Take(3)
+            .Select(x =>
+            {
+                var sprintLabel = x.SprintId.HasValue && sprintNameLookup.TryGetValue(x.SprintId.Value, out var sprintName)
+                    ? sprintName
+                    : "ngoai sprint";
+                var workLabel = x.TaskType == TaskItemType.Bug ? "bug" : "task";
+                return $"{sprintLabel}: {workLabel} #{x.TaskItemId} {TrimTo(x.Title, 50)}";
+            })
+            .ToList();
+
+        var notableText = notable.Count == 0 ? string.Empty : $" Noi bat: {string.Join("; ", notable)}.";
+        return $"Toan project: done {completedTasksAllTime} task, fix {fixedBugsAllTime} bug.{notableText}";
     }
 
     private static string BuildStandupSummary(
@@ -1166,6 +1242,8 @@ public sealed record AssistantMemberProfile(
     int BlockerDays,
     int CompletedTasksRecent,
     int FixedBugsRecent,
+    int CompletedTasksAllTime,
+    int FixedBugsAllTime,
     int OpenTaskCount,
     int OpenBugCount,
     int OpenPoints,
@@ -1174,6 +1252,7 @@ public sealed record AssistantMemberProfile(
     string StandupSummary,
     string CurrentFocusSummary,
     string RecentOutputSummary,
+    string HistoricalOutputSummary,
     string RiskSummary,
     string EvidenceSummary);
 
@@ -1239,3 +1318,4 @@ public sealed record AssistantRiskTrendPoint(
     string Summary);
 
 internal sealed record TaskCreationSeed(int TaskItemId, ulong? AssigneeId, DateTimeOffset CreatedAtUtc);
+internal sealed record CompletedWorkSeed(ulong AssigneeId, TaskItemType TaskType, int TaskItemId, string Title, int Points, int? SprintId);

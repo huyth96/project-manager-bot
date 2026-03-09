@@ -106,9 +106,12 @@ await using (var scope = host.Services.CreateAsyncScope())
     await EnsureColumnAsync(db, "MemberProfiles", "BlockerDays", "INTEGER NOT NULL DEFAULT 0");
     await EnsureColumnAsync(db, "MemberProfiles", "CompletedTasksRecent", "INTEGER NOT NULL DEFAULT 0");
     await EnsureColumnAsync(db, "MemberProfiles", "FixedBugsRecent", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "CompletedTasksAllTime", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "FixedBugsAllTime", "INTEGER NOT NULL DEFAULT 0");
     await EnsureColumnAsync(db, "MemberProfiles", "StandupSummary", "TEXT NOT NULL DEFAULT ''");
     await EnsureColumnAsync(db, "MemberProfiles", "CurrentFocusSummary", "TEXT NOT NULL DEFAULT ''");
     await EnsureColumnAsync(db, "MemberProfiles", "RecentOutputSummary", "TEXT NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(db, "MemberProfiles", "HistoricalOutputSummary", "TEXT NOT NULL DEFAULT ''");
     await EnsureColumnAsync(db, "MemberProfiles", "RiskSummary", "TEXT NOT NULL DEFAULT ''");
     await EnsureGitHubRepoBindingsTableAsync(db);
     await EnsureProjectMemoryMessagesTableAsync(db);
@@ -395,12 +398,18 @@ static async Task EnsureColumnAsync(BotDbContext db, string table, string column
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"CompletedTasksRecent\" INTEGER NOT NULL DEFAULT 0;",
             ("MemberProfiles", "FixedBugsRecent", "INTEGER NOT NULL DEFAULT 0") =>
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"FixedBugsRecent\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "CompletedTasksAllTime", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"CompletedTasksAllTime\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "FixedBugsAllTime", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"FixedBugsAllTime\" INTEGER NOT NULL DEFAULT 0;",
             ("MemberProfiles", "StandupSummary", "TEXT NOT NULL DEFAULT ''") =>
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"StandupSummary\" TEXT NOT NULL DEFAULT '';",
             ("MemberProfiles", "CurrentFocusSummary", "TEXT NOT NULL DEFAULT ''") =>
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"CurrentFocusSummary\" TEXT NOT NULL DEFAULT '';",
             ("MemberProfiles", "RecentOutputSummary", "TEXT NOT NULL DEFAULT ''") =>
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"RecentOutputSummary\" TEXT NOT NULL DEFAULT '';",
+            ("MemberProfiles", "HistoricalOutputSummary", "TEXT NOT NULL DEFAULT ''") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"HistoricalOutputSummary\" TEXT NOT NULL DEFAULT '';",
             ("MemberProfiles", "RiskSummary", "TEXT NOT NULL DEFAULT ''") =>
                 "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"RiskSummary\" TEXT NOT NULL DEFAULT '';",
             _ => throw new InvalidOperationException("Thao tác khởi tạo lược đồ không được hỗ trợ.")
@@ -557,6 +566,8 @@ static async Task EnsureKnowledgeTablesAsync(BotDbContext db)
         "\"BlockerDays\" INTEGER NOT NULL, " +
         "\"CompletedTasksRecent\" INTEGER NOT NULL, " +
         "\"FixedBugsRecent\" INTEGER NOT NULL, " +
+        "\"CompletedTasksAllTime\" INTEGER NOT NULL, " +
+        "\"FixedBugsAllTime\" INTEGER NOT NULL, " +
         "\"OpenTaskCount\" INTEGER NOT NULL, " +
         "\"OpenBugCount\" INTEGER NOT NULL, " +
         "\"OpenPoints\" INTEGER NOT NULL, " +
@@ -565,6 +576,7 @@ static async Task EnsureKnowledgeTablesAsync(BotDbContext db)
         "\"StandupSummary\" TEXT NOT NULL, " +
         "\"CurrentFocusSummary\" TEXT NOT NULL, " +
         "\"RecentOutputSummary\" TEXT NOT NULL, " +
+        "\"HistoricalOutputSummary\" TEXT NOT NULL, " +
         "\"RiskSummary\" TEXT NOT NULL, " +
         "\"EvidenceSummary\" TEXT NOT NULL, " +
         "\"LastSignalDate\" TEXT NULL, " +
