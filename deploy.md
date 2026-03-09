@@ -7,3 +7,9 @@ git checkout main
 git pull --ff-only origin main
 systemctl restart projectmanagerbot
 ```
+
+View logs:
+
+```bash
+journalctl -u projectmanagerbot -n 200 -f
+```

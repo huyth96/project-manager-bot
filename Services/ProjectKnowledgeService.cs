@@ -64,9 +64,11 @@ public sealed class ProjectKnowledgeService(
         var messages = await db.ProjectMemoryMessages
             .AsNoTracking()
             .Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate)
+            .ToListAsync(cancellationToken);
+        messages = messages
             .OrderByDescending(x => x.CreatedAtUtc)
             .ThenByDescending(x => x.Id)
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         var digests = await db.ProjectDailyDigests
             .AsNoTracking()
