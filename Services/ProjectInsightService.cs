@@ -155,6 +155,24 @@ public sealed class ProjectInsightService(
         var sprintTasks = await sprintTasksQuery
             .OrderBy(x => x.Id)
             .ToListAsync(cancellationToken);
+        var completedTasks = (activeSprint is not null
+                ? sprintTasks
+                    .Where(x => x.Type == TaskItemType.Task && x.Status == TaskItemStatus.Done)
+                    .OrderByDescending(x => x.Id)
+                    .Take(12)
+                    .ToList()
+                : await projectTasksQuery
+                    .Where(x => x.Type == TaskItemType.Task && x.Status == TaskItemStatus.Done)
+                    .OrderByDescending(x => x.Id)
+                    .Take(12)
+                    .ToListAsync(cancellationToken))
+            .Select(x => new AssistantCompletedTask(
+                TaskId: x.Id,
+                Title: x.Title,
+                Points: x.Points,
+                AssigneeId: x.AssigneeId,
+                IsInActiveSprint: activeSprint is not null && x.SprintId == activeSprint.Id))
+            .ToList();
 
         var latestTaskEventsByTaskId = await LoadLatestTaskEventsByTaskIdAsync(
             db,
@@ -201,6 +219,7 @@ public sealed class ProjectInsightService(
             Standups: recentStandups,
             StandupDiscipline: standupDiscipline,
             TaskFlow: taskFlow,
+            CompletedTasks: completedTasks,
             MemberWorkloads: memberWorkloads,
             StalledTasks: stalledTasks,
             AttentionItems: attentionItems.Take(Math.Max(1, _options.MaxAttentionItems)).ToList(),
@@ -1087,6 +1106,7 @@ public sealed record ProjectAssistantContext(
     IReadOnlyList<AssistantStandupEntry> Standups,
     AssistantStandupDisciplineSummary StandupDiscipline,
     AssistantTaskFlowSummary TaskFlow,
+    IReadOnlyList<AssistantCompletedTask> CompletedTasks,
     IReadOnlyList<AssistantMemberWorkload> MemberWorkloads,
     IReadOnlyList<AssistantStalledTask> StalledTasks,
     IReadOnlyList<AssistantAttentionItem> AttentionItems,
@@ -1180,6 +1200,13 @@ public sealed record AssistantTaskActorSummary(
     int CompletedTasks,
     int FixedBugs,
     int ClaimedOrAssignedTasks);
+
+public sealed record AssistantCompletedTask(
+    int TaskId,
+    string Title,
+    int Points,
+    ulong? AssigneeId,
+    bool IsInActiveSprint);
 
 public sealed record AssistantMemberWorkload(
     ulong DiscordUserId,

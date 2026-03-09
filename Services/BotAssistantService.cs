@@ -1165,6 +1165,18 @@ public sealed class BotAssistantService(
                     })
                     .ToList()
             },
+            completedTasks = insight.CompletedTasks
+                .Take(8)
+                .Select(x => new
+                {
+                    x.TaskId,
+                    x.Title,
+                    x.Points,
+                    x.AssigneeId,
+                    AssigneeName = x.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, x.AssigneeId.Value) : null,
+                    x.IsInActiveSprint
+                })
+                .ToList(),
             stalledTasks = insight.StalledTasks
                 .Take(maxStalledTasks)
                 .Select(x => new
@@ -1603,6 +1615,17 @@ public sealed class BotAssistantService(
                     })
                     .ToList()
             },
+            completedTasks = insight.CompletedTasks
+                .Take(8)
+                .Select(x => new
+                {
+                    x.TaskId,
+                    x.Title,
+                    x.Points,
+                    x.AssigneeId,
+                    x.IsInActiveSprint
+                })
+                .ToList(),
             stalledTasks = insight.StalledTasks
                 .Take(maxStalledTasks)
                 .Select(x => new
@@ -1921,6 +1944,9 @@ public sealed class BotAssistantService(
 
     private static bool LooksLikeDeterministicFactQuery(string lowerQuestion, AssistantIntent intent)
     {
+        var asksCompletedTaskList = ContainsAny(lowerQuestion, "hoan thanh", "da xong", "done")
+            && ContainsAny(lowerQuestion, "task", "nhung task nao", "task nao");
+
         var hasFactCue = ContainsAny(
             lowerQuestion,
             "bao nhieu",
@@ -1938,7 +1964,8 @@ public sealed class BotAssistantService(
             "done bao nhieu",
             "xong bao nhieu",
             "mo bao nhieu",
-            "dong bao nhieu");
+            "dong bao nhieu")
+            || asksCompletedTaskList;
 
         if (!hasFactCue)
         {
@@ -2067,6 +2094,29 @@ public sealed class BotAssistantService(
         builder.AppendLine($"- High-point chua start: `{highPointNotStartedCount}`");
         builder.AppendLine($"- Open-bug attention item: `{openBugAttentionCount}`");
         builder.AppendLine($"- Task flow {insight.TaskFlow.LookbackDays} ngay: tao `{insight.TaskFlow.CreatedTasks}` | done `{insight.TaskFlow.CompletedTasks}` | mo bug `{insight.TaskFlow.CreatedBugs}` | dong bug `{insight.TaskFlow.FixedBugs}` | tra backlog `{insight.TaskFlow.ReturnedToBacklog}`");
+
+        var asksCompletedTaskList = ContainsAny(lowerQuestion, "hoan thanh", "da xong", "done")
+            && ContainsAny(lowerQuestion, "task", "nhung task nao", "task nao");
+        if (asksCompletedTaskList)
+        {
+            var completedTasks = insight.CompletedTasks.Take(8).ToList();
+            if (completedTasks.Count == 0)
+            {
+                builder.AppendLine("- Hien chua thay task nao o trang thai `Done` trong pham vi snapshot nay.");
+            }
+            else
+            {
+                builder.AppendLine("Task da hoan thanh:");
+                foreach (var task in completedTasks)
+                {
+                    var owner = task.AssigneeId.HasValue
+                        ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                        : string.Empty;
+                    var scope = task.IsInActiveSprint ? " | active sprint" : string.Empty;
+                    builder.AppendLine($"- #{task.TaskId} {task.Title} | `{task.Points}d`{owner}{scope}");
+                }
+            }
+        }
 
         if (ContainsAny(lowerQuestion, "ai", "owner", "nguoi nao"))
         {
