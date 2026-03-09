@@ -1300,6 +1300,7 @@ public sealed class BotAssistantService(
             "Missing reporters are inferred heuristically from open task assignees, recent standup reporters, and repeated recent project participants. " +
             "For stalled task questions, use the stalledTasks list, daysWithoutChange, evidence, and recent taskFlow data before concluding that a task is stuck. " +
             "Use memberWorkloads and member profiles for questions about who is carrying the most open work right now. " +
+            "For member-specific task, bug, point, or workload counts, use the exact numbers from memberWorkloads/member profiles or say the data is unavailable; do not infer or estimate counts. " +
             "For weekly discussion or history questions, rely on topics, decisions, risks, and daily digests first, then use relevant historical messages as evidence. " +
             "When a Mention field exists, use the mention token directly instead of raw Discord IDs or plain display names. " +
             "When answering about people, topics, decisions, or risks, mention evidence, time range, and confidence when the context provides them. " +
@@ -1325,7 +1326,7 @@ public sealed class BotAssistantService(
             return AssistantIntent.StandupDiscipline;
         }
 
-        if (ContainsAny(
+        if (LooksLikeMemberCountQuery(lower) || ContainsAny(
             lower,
             "member",
             "thanh vien",
@@ -1976,7 +1977,7 @@ public sealed class BotAssistantService(
         AssistantIntent intent)
     {
         var lowerQuestion = question.Trim().ToLowerInvariant();
-        if (!LooksLikeDeterministicFactQuery(lowerQuestion, intent))
+        if (!LooksLikeDeterministicFactQuery(lowerQuestion, insight, intent))
         {
             return null;
         }
@@ -2008,6 +2009,12 @@ public sealed class BotAssistantService(
                 {
                     AppendDeterministicStandupFacts(builder, insight, lowerQuestion);
                 }
+                else if (LooksLikeMemberCountQuery(lowerQuestion)
+                    || LooksLikeMemberScopedWorkQuery(insight, lowerQuestion)
+                    || LooksLikeMemberContributionQuery(lowerQuestion))
+                {
+                    AppendDeterministicMemberFacts(builder, insight, lowerQuestion);
+                }
                 else if (ContainsAny(lowerQuestion, "task", "bug", "backlog", "dinh tre", "stalled"))
                 {
                     AppendDeterministicTaskFacts(builder, insight, lowerQuestion);
@@ -2033,11 +2040,16 @@ public sealed class BotAssistantService(
         return builder.ToString().Trim();
     }
 
-    private static bool LooksLikeDeterministicFactQuery(string lowerQuestion, AssistantIntent intent)
+    private static bool LooksLikeDeterministicFactQuery(
+        string lowerQuestion,
+        ProjectAssistantContext insight,
+        AssistantIntent intent)
     {
         var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
         var asksSprintTaskList = LooksLikeSprintTaskQuery(lowerQuestion);
         var asksStandupReliability = LooksLikeStandupReliabilityQuery(lowerQuestion);
+        var asksMemberCounts = LooksLikeMemberCountQuery(lowerQuestion)
+            || LooksLikeMemberScopedWorkQuery(insight, lowerQuestion);
         var asksMemberContribution = LooksLikeMemberContributionQuery(lowerQuestion);
 
         var hasFactCue = ContainsAny(
@@ -2061,6 +2073,7 @@ public sealed class BotAssistantService(
             || asksCompletedTaskList
             || asksSprintTaskList
             || asksStandupReliability
+            || asksMemberCounts
             || asksMemberContribution;
 
         if (!hasFactCue)
@@ -2393,6 +2406,51 @@ public sealed class BotAssistantService(
         string lowerQuestion)
     {
         var targetMember = TryResolveTargetMember(insight, lowerQuestion);
+        var asksMemberCounts = LooksLikeMemberCountQuery(lowerQuestion)
+            || LooksLikeMemberScopedWorkQuery(insight, lowerQuestion);
+
+        if (asksMemberCounts)
+        {
+            builder.AppendLine();
+
+            if (targetMember is not null)
+            {
+                var workload = FindMemberWorkload(insight, targetMember.DiscordUserId);
+                builder.AppendLine($"Member: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
+                builder.AppendLine($"- Hien tai: open task `{targetMember.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mo `{targetMember.OpenBugCount}` | open points `{targetMember.OpenPoints}`");
+                builder.AppendLine($"- Gan day: done `{targetMember.CompletedTasksRecent}` task | fix `{targetMember.FixedBugsRecent}` bug");
+                builder.AppendLine($"- Toan project: done `{targetMember.CompletedTasksAllTime}` task | fix `{targetMember.FixedBugsAllTime}` bug");
+                builder.AppendLine($"- Focus: {targetMember.CurrentFocusSummary}");
+                builder.AppendLine($"- Standup: {targetMember.StandupSummary}");
+                builder.AppendLine($"- Evidence: {targetMember.EvidenceSummary}");
+                return;
+            }
+
+            var memberRows = insight.Knowledge.Members
+                .OrderByDescending(x => x.OpenPoints)
+                .ThenByDescending(x => x.OpenTaskCount)
+                .ThenByDescending(x => x.CompletedTasksAllTime)
+                .Take(8)
+                .ToList();
+
+            if (memberRows.Count == 0)
+            {
+                builder.AppendLine("- Chua co member profile de thong ke so luong task/bug theo nguoi.");
+                return;
+            }
+
+            builder.AppendLine("Thong ke task/bug theo member:");
+            foreach (var member in memberRows)
+            {
+                var workload = FindMemberWorkload(insight, member.DiscordUserId);
+                builder.AppendLine(
+                    $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open task `{member.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mo `{member.OpenBugCount}` | open points `{member.OpenPoints}` | done all-time `{member.CompletedTasksAllTime}` | fix all-time `{member.FixedBugsAllTime}`");
+            }
+
+            builder.AppendLine("Ghi chu: open counts la snapshot hien tai; all-time done/fix uu tien completion events, neu thieu thi moi fallback snapshot.");
+            return;
+        }
+
         if (LooksLikeMemberContributionQuery(lowerQuestion) && targetMember is not null)
         {
             builder.AppendLine();
@@ -2504,6 +2562,79 @@ public sealed class BotAssistantService(
                 && ContainsAny(lowerQuestion, "ai", "nguoi nay", "người này", "<@"));
     }
 
+    private static bool LooksLikeMemberCountQuery(string lowerQuestion)
+    {
+        var hasCountCue = ContainsAny(
+            lowerQuestion,
+            "bao nhieu",
+            "co bao nhieu",
+            "tong so",
+            "so luong",
+            "count");
+        var hasStatusCue = ContainsAny(
+            lowerQuestion,
+            "trang thai",
+            "status",
+            "dang lam",
+            "dang xu ly",
+            "dang giu",
+            "dang co",
+            "dang mo",
+            "dang fix");
+        var hasWorkCue = ContainsAny(
+            lowerQuestion,
+            "task",
+            "bug",
+            "point",
+            "points",
+            "workload",
+            "dang giu",
+            "in-progress",
+            "open");
+        var hasMemberCue =
+            Regex.IsMatch(lowerQuestion, @"<@!?\d+>")
+            || ContainsAny(
+                lowerQuestion,
+                "ai",
+                "nguoi nao",
+                "người nào",
+                "nguoi nay",
+                "người này",
+                "member",
+                "thanh vien",
+                "moi nguoi",
+                "mỗi người",
+                "tung nguoi",
+                "từng người",
+                "cac thanh vien",
+                "các thành viên");
+
+        return ((hasCountCue || hasStatusCue) && hasWorkCue && hasMemberCue)
+            || (hasWorkCue && ContainsAny(lowerQuestion, "moi nguoi", "mỗi người", "tung nguoi", "từng người", "cac thanh vien", "các thành viên"))
+            || (Regex.IsMatch(lowerQuestion, @"<@!?\d+>") && hasWorkCue);
+    }
+
+    private static bool LooksLikeMemberScopedWorkQuery(ProjectAssistantContext insight, string lowerQuestion)
+    {
+        return TryResolveTargetMember(insight, lowerQuestion) is not null
+            && ContainsAny(
+                lowerQuestion,
+                "task",
+                "bug",
+                "point",
+                "points",
+                "workload",
+                "dang giu",
+                "dang xu ly",
+                "dang lam",
+                "dang co",
+                "trang thai",
+                "status",
+                "open",
+                "in-progress",
+                "qua tai");
+    }
+
     private static bool AsksAboutMissingStandups(string lowerQuestion)
     {
         return ContainsAny(
@@ -2547,6 +2678,11 @@ public sealed class BotAssistantService(
             .Where(x => !string.IsNullOrWhiteSpace(x.DisplayName))
             .OrderByDescending(x => x.DisplayName.Length)
             .FirstOrDefault(x => lowerQuestion.Contains(x.DisplayName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static AssistantMemberWorkload? FindMemberWorkload(ProjectAssistantContext insight, ulong userId)
+    {
+        return insight.MemberWorkloads.FirstOrDefault(x => x.DiscordUserId == userId);
     }
 
     private static IEnumerable<string> BuildCompletedTaskLinesForMember(ProjectAssistantContext insight, ulong userId)

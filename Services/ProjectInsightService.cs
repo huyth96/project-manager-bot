@@ -906,7 +906,6 @@ public sealed class ProjectInsightService(
             .ThenByDescending(x => x.OpenBugCount)
             .ThenByDescending(x => x.RecentActivityCount)
             .ThenBy(x => x.DiscordUserId)
-            .Take(8)
             .ToList();
     }
 
