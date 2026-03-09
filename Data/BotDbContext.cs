@@ -158,7 +158,12 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             entity.Property(x => x.DisplayName).HasMaxLength(100);
             entity.Property(x => x.RoleSummary).HasMaxLength(64);
             entity.Property(x => x.SkillKeywordsJson).HasMaxLength(1200);
+            entity.Property(x => x.DominantTopicsJson).HasMaxLength(1200);
             entity.Property(x => x.ActiveChannelsJson).HasMaxLength(1200);
+            entity.Property(x => x.StandupSummary).HasMaxLength(500);
+            entity.Property(x => x.CurrentFocusSummary).HasMaxLength(700);
+            entity.Property(x => x.RecentOutputSummary).HasMaxLength(500);
+            entity.Property(x => x.RiskSummary).HasMaxLength(500);
             entity.Property(x => x.EvidenceSummary).HasMaxLength(1000);
 
             entity.HasIndex(x => new { x.ProjectId, x.DiscordUserId }).IsUnique();

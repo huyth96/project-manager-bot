@@ -99,6 +99,17 @@ await using (var scope = host.Services.CreateAsyncScope())
     await EnsureColumnAsync(db, "TaskItems", "LastOverdueReminderDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "StartDateLocal", "TEXT NULL");
     await EnsureColumnAsync(db, "Sprints", "EndDateLocal", "TEXT NULL");
+    await EnsureColumnAsync(db, "MemberProfiles", "DominantTopicsJson", "TEXT NOT NULL DEFAULT '[]'");
+    await EnsureColumnAsync(db, "MemberProfiles", "MissingStandupDays", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "LateStandupRatePercent", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "AverageLateMinutes", "INTEGER NULL");
+    await EnsureColumnAsync(db, "MemberProfiles", "BlockerDays", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "CompletedTasksRecent", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "FixedBugsRecent", "INTEGER NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(db, "MemberProfiles", "StandupSummary", "TEXT NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(db, "MemberProfiles", "CurrentFocusSummary", "TEXT NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(db, "MemberProfiles", "RecentOutputSummary", "TEXT NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(db, "MemberProfiles", "RiskSummary", "TEXT NOT NULL DEFAULT ''");
     await EnsureGitHubRepoBindingsTableAsync(db);
     await EnsureProjectMemoryMessagesTableAsync(db);
     await EnsureProjectDailyDigestsTableAsync(db);
@@ -370,6 +381,28 @@ static async Task EnsureColumnAsync(BotDbContext db, string table, string column
                 "ALTER TABLE \"Sprints\" ADD COLUMN \"StartDateLocal\" TEXT NULL;",
             ("Sprints", "EndDateLocal", "TEXT NULL") =>
                 "ALTER TABLE \"Sprints\" ADD COLUMN \"EndDateLocal\" TEXT NULL;",
+            ("MemberProfiles", "DominantTopicsJson", "TEXT NOT NULL DEFAULT '[]'") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"DominantTopicsJson\" TEXT NOT NULL DEFAULT '[]';",
+            ("MemberProfiles", "MissingStandupDays", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"MissingStandupDays\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "LateStandupRatePercent", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"LateStandupRatePercent\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "AverageLateMinutes", "INTEGER NULL") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"AverageLateMinutes\" INTEGER NULL;",
+            ("MemberProfiles", "BlockerDays", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"BlockerDays\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "CompletedTasksRecent", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"CompletedTasksRecent\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "FixedBugsRecent", "INTEGER NOT NULL DEFAULT 0") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"FixedBugsRecent\" INTEGER NOT NULL DEFAULT 0;",
+            ("MemberProfiles", "StandupSummary", "TEXT NOT NULL DEFAULT ''") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"StandupSummary\" TEXT NOT NULL DEFAULT '';",
+            ("MemberProfiles", "CurrentFocusSummary", "TEXT NOT NULL DEFAULT ''") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"CurrentFocusSummary\" TEXT NOT NULL DEFAULT '';",
+            ("MemberProfiles", "RecentOutputSummary", "TEXT NOT NULL DEFAULT ''") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"RecentOutputSummary\" TEXT NOT NULL DEFAULT '';",
+            ("MemberProfiles", "RiskSummary", "TEXT NOT NULL DEFAULT ''") =>
+                "ALTER TABLE \"MemberProfiles\" ADD COLUMN \"RiskSummary\" TEXT NOT NULL DEFAULT '';",
             _ => throw new InvalidOperationException("Thao tác khởi tạo lược đồ không được hỗ trợ.")
         };
 
@@ -513,15 +546,26 @@ static async Task EnsureKnowledgeTablesAsync(BotDbContext db)
         "\"DisplayName\" TEXT NOT NULL, " +
         "\"RoleSummary\" TEXT NOT NULL, " +
         "\"SkillKeywordsJson\" TEXT NOT NULL, " +
+        "\"DominantTopicsJson\" TEXT NOT NULL, " +
         "\"ActiveChannelsJson\" TEXT NOT NULL, " +
         "\"TotalMessageCount\" INTEGER NOT NULL, " +
         "\"TotalStandupReports\" INTEGER NOT NULL, " +
         "\"TotalTaskEvents\" INTEGER NOT NULL, " +
+        "\"MissingStandupDays\" INTEGER NOT NULL, " +
+        "\"LateStandupRatePercent\" INTEGER NOT NULL, " +
+        "\"AverageLateMinutes\" INTEGER NULL, " +
+        "\"BlockerDays\" INTEGER NOT NULL, " +
+        "\"CompletedTasksRecent\" INTEGER NOT NULL, " +
+        "\"FixedBugsRecent\" INTEGER NOT NULL, " +
         "\"OpenTaskCount\" INTEGER NOT NULL, " +
         "\"OpenBugCount\" INTEGER NOT NULL, " +
         "\"OpenPoints\" INTEGER NOT NULL, " +
         "\"ReliabilityScore\" INTEGER NOT NULL, " +
         "\"ConfidencePercent\" INTEGER NOT NULL, " +
+        "\"StandupSummary\" TEXT NOT NULL, " +
+        "\"CurrentFocusSummary\" TEXT NOT NULL, " +
+        "\"RecentOutputSummary\" TEXT NOT NULL, " +
+        "\"RiskSummary\" TEXT NOT NULL, " +
         "\"EvidenceSummary\" TEXT NOT NULL, " +
         "\"LastSignalDate\" TEXT NULL, " +
         "\"LastSeenAtUtc\" TEXT NULL, " +

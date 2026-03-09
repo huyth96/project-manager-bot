@@ -69,6 +69,28 @@ public sealed class ProjectKnowledgeService(
             .OrderByDescending(x => x.CreatedAtUtc)
             .ThenByDescending(x => x.Id)
             .ToList();
+        var botUserIds = messages
+            .Where(x => x.IsBot)
+            .Select(x => x.AuthorId)
+            .ToHashSet();
+        botUserIds.Add(0);
+        var humanMessages = messages
+            .Where(x => !x.IsBot)
+            .ToList();
+        var displayNameLookup = BuildDisplayNameMap(humanMessages);
+        var filteredStandups = standups
+            .Where(x => !botUserIds.Contains(x.DiscordUserId))
+            .ToList();
+        var filteredStandupDiscipline = FilterStandupDiscipline(standupDiscipline, botUserIds);
+        var filteredMemberWorkloads = memberWorkloads
+            .Where(x => !botUserIds.Contains(x.DiscordUserId))
+            .ToList();
+        var filteredStalledTasks = stalledTasks
+            .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
+            .ToList();
+        var filteredAttentionItems = attentionItems
+            .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
+            .ToList();
 
         var digests = await db.ProjectDailyDigests
             .AsNoTracking()
@@ -82,6 +104,9 @@ public sealed class ProjectKnowledgeService(
             .OrderByDescending(x => x.OccurredAtUtc)
             .ThenByDescending(x => x.Id)
             .ToListAsync(cancellationToken);
+        taskEvents = taskEvents
+            .Where(x => !x.ActorDiscordId.HasValue || !botUserIds.Contains(x.ActorDiscordId.Value))
+            .ToList();
 
         var taskCreations = await db.TaskItems
             .AsNoTracking()
@@ -89,18 +114,19 @@ public sealed class ProjectKnowledgeService(
             .Select(x => new TaskCreationSeed(x.Id, x.AssigneeId, x.CreatedAtUtc))
             .ToListAsync(cancellationToken);
 
-        var topicMentions = BuildTopicMentions(projectId, topicFromDate, messages, digests);
+        var topicMentions = BuildTopicMentions(projectId, topicFromDate, humanMessages, digests);
         var memberSignals = BuildMemberSignals(
             projectId,
             knowledgeFromDate,
-            messages,
-            standups,
+            humanMessages,
+            filteredStandups,
             taskEvents,
             taskCreations,
-            memberWorkloads);
-        var decisionLogs = BuildDecisionLogs(projectId, topicFromDate, messages);
-        var riskLogs = BuildRiskLogs(projectId, today, messages, standups, attentionItems, stalledTasks);
-        var memberProfiles = BuildMemberProfiles(projectId, messages, taskEvents, memberSignals, memberWorkloads);
+            filteredMemberWorkloads,
+            botUserIds);
+        var decisionLogs = BuildDecisionLogs(projectId, topicFromDate, humanMessages);
+        var riskLogs = BuildRiskLogs(projectId, today, humanMessages, filteredStandups, filteredAttentionItems, filteredStalledTasks, displayNameLookup);
+        var memberProfiles = BuildMemberProfiles(projectId, humanMessages, filteredStandups, taskEvents, memberSignals, filteredMemberWorkloads, displayNameLookup, botUserIds);
 
         ReplaceDateRange(db.TopicMentions, db.TopicMentions.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
         ReplaceDateRange(db.MemberDailySignals, db.MemberDailySignals.Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate));
@@ -113,7 +139,7 @@ public sealed class ProjectKnowledgeService(
         db.RiskLogs.AddRange(riskLogs);
         UpsertMemberProfiles(db, projectId, memberProfiles);
         UpsertSprintSnapshot(db, projectId, today, sprint, stalledTasks, attentionItems);
-        UpsertRiskSnapshot(db, projectId, today, standups, standupDiscipline, attentionItems, stalledTasks, sprint.OpenBugCount);
+        UpsertRiskSnapshot(db, projectId, today, filteredStandups, filteredStandupDiscipline, filteredAttentionItems, filteredStalledTasks, sprint.OpenBugCount);
 
         await db.SaveChangesAsync(cancellationToken);
 
@@ -166,7 +192,8 @@ public sealed class ProjectKnowledgeService(
         IReadOnlyList<AssistantStandupEntry> standups,
         IReadOnlyList<TaskEvent> taskEvents,
         IReadOnlyList<TaskCreationSeed> taskCreations,
-        IReadOnlyList<AssistantMemberWorkload> memberWorkloads)
+        IReadOnlyList<AssistantMemberWorkload> memberWorkloads,
+        HashSet<ulong> ignoredUserIds)
     {
         var today = _studioTime.LocalDate.Date;
         var reportLookup = standups.ToLookup(x => (x.DiscordUserId, x.Date.Date));
@@ -177,22 +204,28 @@ public sealed class ProjectKnowledgeService(
 
         foreach (var message in messages)
         {
-            ObserveFirstActive(firstActiveDates, message.AuthorId, message.LocalDate.Date);
+            if (!ignoredUserIds.Contains(message.AuthorId))
+            {
+                ObserveFirstActive(firstActiveDates, message.AuthorId, message.LocalDate.Date);
+            }
         }
 
         foreach (var standup in standups)
         {
-            ObserveFirstActive(firstActiveDates, standup.DiscordUserId, standup.Date.Date);
+            if (!ignoredUserIds.Contains(standup.DiscordUserId))
+            {
+                ObserveFirstActive(firstActiveDates, standup.DiscordUserId, standup.Date.Date);
+            }
         }
 
         foreach (var taskEvent in taskEvents)
         {
-            if (taskEvent.ActorDiscordId.HasValue)
+            if (taskEvent.ActorDiscordId.HasValue && !ignoredUserIds.Contains(taskEvent.ActorDiscordId.Value))
             {
                 ObserveFirstActive(firstActiveDates, taskEvent.ActorDiscordId.Value, taskEvent.LocalDate.Date);
             }
 
-            if (taskEvent.ToAssigneeId.HasValue)
+            if (taskEvent.ToAssigneeId.HasValue && !ignoredUserIds.Contains(taskEvent.ToAssigneeId.Value))
             {
                 ObserveFirstActive(firstActiveDates, taskEvent.ToAssigneeId.Value, taskEvent.LocalDate.Date);
             }
@@ -200,7 +233,7 @@ public sealed class ProjectKnowledgeService(
 
         foreach (var task in taskCreations)
         {
-            if (task.AssigneeId.HasValue)
+            if (task.AssigneeId.HasValue && !ignoredUserIds.Contains(task.AssigneeId.Value))
             {
                 ObserveFirstActive(firstActiveDates, task.AssigneeId.Value, TimeZoneInfo.ConvertTime(task.CreatedAtUtc, _studioTime.TimeZone).Date);
             }
@@ -298,12 +331,16 @@ public sealed class ProjectKnowledgeService(
     private List<MemberProfile> BuildMemberProfiles(
         int projectId,
         IReadOnlyList<ProjectMemoryMessage> messages,
+        IReadOnlyList<AssistantStandupEntry> standups,
         IReadOnlyList<TaskEvent> taskEvents,
         IReadOnlyList<MemberDailySignal> memberSignals,
-        IReadOnlyList<AssistantMemberWorkload> memberWorkloads)
+        IReadOnlyList<AssistantMemberWorkload> memberWorkloads,
+        IReadOnlyDictionary<ulong, string> displayNameLookup,
+        HashSet<ulong> ignoredUserIds)
     {
         var workloadsByUser = memberWorkloads.ToDictionary(x => x.DiscordUserId);
         var messageGroups = messages.GroupBy(x => x.AuthorId).ToDictionary(x => x.Key, x => x.ToList());
+        var standupGroups = standups.GroupBy(x => x.DiscordUserId).ToDictionary(x => x.Key, x => x.ToList());
         var eventGroups = taskEvents
             .Where(x => x.ActorDiscordId.HasValue)
             .GroupBy(x => x.ActorDiscordId!.Value)
@@ -314,14 +351,29 @@ public sealed class ProjectKnowledgeService(
             .Concat(signalGroups.Keys)
             .Concat(workloadsByUser.Keys)
             .Distinct()
+            .Where(x => !ignoredUserIds.Contains(x))
             .ToList();
 
         return memberIds.Select(userId =>
         {
             var memberMessages = messageGroups.GetValueOrDefault(userId) ?? [];
+            var memberStandups = standupGroups.GetValueOrDefault(userId) ?? [];
             var memberEvents = eventGroups.GetValueOrDefault(userId) ?? [];
             var signals = signalGroups.GetValueOrDefault(userId) ?? [];
             var workload = workloadsByUser.GetValueOrDefault(userId);
+            var expectedSignals = signals.Where(x => x.ExpectedStandup).ToList();
+            var submittedSignals = signals.Where(x => x.SubmittedStandup).ToList();
+            var lateSignals = submittedSignals.Where(x => x.WasLate && x.LateMinutes.HasValue).ToList();
+            var missingStandupDays = expectedSignals.Count(x => !x.SubmittedStandup);
+            var lateRatePercent = submittedSignals.Count == 0
+                ? 0
+                : (int)Math.Round((double)lateSignals.Count / submittedSignals.Count * 100, MidpointRounding.AwayFromZero);
+            var averageLateMinutes = lateSignals.Count == 0
+                ? null
+                : (int?)Math.Round(lateSignals.Average(x => x.LateMinutes!.Value), MidpointRounding.AwayFromZero);
+            var blockerDays = signals.Count(x => x.HasBlocker);
+            var completedTasksRecent = signals.Sum(x => x.CompletedTasks);
+            var fixedBugsRecent = signals.Sum(x => x.FixedBugs);
             var activeChannels = memberMessages
                 .GroupBy(x => x.ChannelName)
                 .OrderByDescending(x => x.Count())
@@ -329,34 +381,44 @@ public sealed class ProjectKnowledgeService(
                 .Take(3)
                 .Select(x => x.Key)
                 .ToList();
-            var skills = memberMessages
-                .SelectMany(x => DetectTopicKeys(x.NormalizedContent))
-                .GroupBy(x => x)
-                .OrderByDescending(x => x.Count())
-                .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            var dominantTopics = CollectDominantTopics(memberMessages, memberStandups, memberEvents)
                 .Take(4)
-                .Select(x => x.Key)
                 .ToList();
             var reliability = signals.Count == 0 ? 50 : (int)Math.Round(signals.Average(x => x.ReliabilityScore));
             var confidence = Math.Clamp(30 + memberMessages.Count * 3 + memberEvents.Count * 2 + signals.Count * 4, 25, 95);
+            var currentFocusSummary = BuildCurrentFocusSummary(memberMessages, memberStandups, memberEvents, workload, dominantTopics);
+            var recentOutputSummary = BuildRecentOutputSummary(completedTasksRecent, fixedBugsRecent, memberEvents);
+            var standupSummary = BuildStandupSummary(expectedSignals.Count, submittedSignals.Count, missingStandupDays, lateSignals.Count, lateRatePercent, averageLateMinutes, blockerDays);
+            var riskSummary = BuildMemberRiskSummary(workload, missingStandupDays, lateRatePercent, blockerDays);
 
             return new MemberProfile
             {
                 ProjectId = projectId,
                 DiscordUserId = userId,
-                DisplayName = memberMessages.FirstOrDefault()?.AuthorName ?? $"User {userId}",
+                DisplayName = ResolveDisplayName(displayNameLookup, userId),
                 RoleSummary = ResolveRoleSummary(workload, memberEvents),
-                SkillKeywordsJson = Serialize(skills),
+                SkillKeywordsJson = Serialize(dominantTopics),
+                DominantTopicsJson = Serialize(dominantTopics),
                 ActiveChannelsJson = Serialize(activeChannels),
                 TotalMessageCount = memberMessages.Count,
-                TotalStandupReports = signals.Count(x => x.SubmittedStandup),
+                TotalStandupReports = submittedSignals.Count,
                 TotalTaskEvents = memberEvents.Count,
+                MissingStandupDays = missingStandupDays,
+                LateStandupRatePercent = lateRatePercent,
+                AverageLateMinutes = averageLateMinutes,
+                BlockerDays = blockerDays,
+                CompletedTasksRecent = completedTasksRecent,
+                FixedBugsRecent = fixedBugsRecent,
                 OpenTaskCount = workload?.OpenTaskCount ?? 0,
                 OpenBugCount = workload?.OpenBugCount ?? 0,
                 OpenPoints = workload?.OpenPoints ?? 0,
                 ReliabilityScore = reliability,
                 ConfidencePercent = confidence,
-                EvidenceSummary = $"{memberMessages.Count} messages, {signals.Count(x => x.SubmittedStandup)} standups, {memberEvents.Count} task events in {KnowledgeLookbackDays} days",
+                StandupSummary = standupSummary,
+                CurrentFocusSummary = currentFocusSummary,
+                RecentOutputSummary = recentOutputSummary,
+                RiskSummary = riskSummary,
+                EvidenceSummary = $"{KnowledgeLookbackDays}d window: {memberMessages.Count} messages, {submittedSignals.Count} standups, {memberEvents.Count} task events",
                 LastSignalDate = signals.OrderByDescending(x => x.LocalDate).FirstOrDefault()?.LocalDate,
                 LastSeenAtUtc = memberMessages.OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault()?.CreatedAtUtc.UtcDateTime,
                 UpdatedAtUtc = DateTime.UtcNow
@@ -445,7 +507,8 @@ public sealed class ProjectKnowledgeService(
         IReadOnlyList<ProjectMemoryMessage> messages,
         IReadOnlyList<AssistantStandupEntry> standups,
         IReadOnlyList<AssistantAttentionItem> attentionItems,
-        IReadOnlyList<AssistantStalledTask> stalledTasks)
+        IReadOnlyList<AssistantStalledTask> stalledTasks,
+        IReadOnlyDictionary<ulong, string> displayNameLookup)
     {
         var result = new List<RiskLog>();
 
@@ -458,7 +521,7 @@ public sealed class ProjectKnowledgeService(
                 RiskKey = "standup_blocker",
                 Severity = "high",
                 Summary = TrimTo(x.Blockers, 180),
-                Evidence = $"Standup blocker from <@{x.DiscordUserId}>",
+                Evidence = $"Standup blocker from {ResolveDisplayName(displayNameLookup, x.DiscordUserId)} on {x.Date:yyyy-MM-dd}",
                 ConfidencePercent = 90,
                 CreatedAtUtc = DateTime.UtcNow
             }));
@@ -595,15 +658,26 @@ public sealed class ProjectKnowledgeService(
             current.DisplayName = profile.DisplayName;
             current.RoleSummary = profile.RoleSummary;
             current.SkillKeywordsJson = profile.SkillKeywordsJson;
+            current.DominantTopicsJson = profile.DominantTopicsJson;
             current.ActiveChannelsJson = profile.ActiveChannelsJson;
             current.TotalMessageCount = profile.TotalMessageCount;
             current.TotalStandupReports = profile.TotalStandupReports;
             current.TotalTaskEvents = profile.TotalTaskEvents;
+            current.MissingStandupDays = profile.MissingStandupDays;
+            current.LateStandupRatePercent = profile.LateStandupRatePercent;
+            current.AverageLateMinutes = profile.AverageLateMinutes;
+            current.BlockerDays = profile.BlockerDays;
+            current.CompletedTasksRecent = profile.CompletedTasksRecent;
+            current.FixedBugsRecent = profile.FixedBugsRecent;
             current.OpenTaskCount = profile.OpenTaskCount;
             current.OpenBugCount = profile.OpenBugCount;
             current.OpenPoints = profile.OpenPoints;
             current.ReliabilityScore = profile.ReliabilityScore;
             current.ConfidencePercent = profile.ConfidencePercent;
+            current.StandupSummary = profile.StandupSummary;
+            current.CurrentFocusSummary = profile.CurrentFocusSummary;
+            current.RecentOutputSummary = profile.RecentOutputSummary;
+            current.RiskSummary = profile.RiskSummary;
             current.EvidenceSummary = profile.EvidenceSummary;
             current.LastSignalDate = profile.LastSignalDate;
             current.LastSeenAtUtc = profile.LastSeenAtUtc;
@@ -683,12 +757,23 @@ public sealed class ProjectKnowledgeService(
             profile.DisplayName,
             profile.RoleSummary,
             DeserializeList(profile.SkillKeywordsJson),
+            DeserializeList(profile.DominantTopicsJson),
             DeserializeList(profile.ActiveChannelsJson),
+            profile.MissingStandupDays,
+            profile.LateStandupRatePercent,
+            profile.AverageLateMinutes,
+            profile.BlockerDays,
+            profile.CompletedTasksRecent,
+            profile.FixedBugsRecent,
             profile.OpenTaskCount,
             profile.OpenBugCount,
             profile.OpenPoints,
             profile.ReliabilityScore,
             profile.ConfidencePercent,
+            profile.StandupSummary,
+            profile.CurrentFocusSummary,
+            profile.RecentOutputSummary,
+            profile.RiskSummary,
             profile.EvidenceSummary);
     }
 
@@ -769,12 +854,209 @@ public sealed class ProjectKnowledgeService(
         return "contributor";
     }
 
+    private static IReadOnlyList<string> CollectDominantTopics(
+        IReadOnlyList<ProjectMemoryMessage> memberMessages,
+        IReadOnlyList<AssistantStandupEntry> memberStandups,
+        IReadOnlyList<TaskEvent> memberEvents)
+    {
+        var topicSignals = memberMessages
+            .SelectMany(x => DetectTopicKeys(x.NormalizedContent))
+            .Concat(memberStandups.SelectMany(x => DetectTopicKeys($"{x.Yesterday} {x.Today} {x.Blockers}")))
+            .Concat(memberEvents
+                .SelectMany(x => DetectTopicKeys($"{x.TitleSnapshot} {x.DescriptionSnapshot} {x.Summary}")))
+            .GroupBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(x => x.Count())
+            .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(4)
+            .Select(x => x.Key)
+            .ToList();
+
+        return topicSignals;
+    }
+
+    private static string BuildCurrentFocusSummary(
+        IReadOnlyList<ProjectMemoryMessage> memberMessages,
+        IReadOnlyList<AssistantStandupEntry> memberStandups,
+        IReadOnlyList<TaskEvent> memberEvents,
+        AssistantMemberWorkload? workload,
+        IReadOnlyList<string> dominantTopics)
+    {
+        var latestStandup = memberStandups
+            .OrderByDescending(x => x.Date)
+            .ThenByDescending(x => x.ReportedAtLocal)
+            .FirstOrDefault();
+
+        if (latestStandup is not null && !string.IsNullOrWhiteSpace(latestStandup.Today))
+        {
+            var blockerText = latestStandup.HasBlockers && !string.IsNullOrWhiteSpace(latestStandup.Blockers)
+                ? $" Blocker: {TrimTo(latestStandup.Blockers, 80)}"
+                : string.Empty;
+            return TrimTo($"{latestStandup.Today}.{blockerText}", 220);
+        }
+
+        var latestEvent = memberEvents
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.Id)
+            .FirstOrDefault();
+
+        if (latestEvent is not null && !string.IsNullOrWhiteSpace(latestEvent.TitleSnapshot))
+        {
+            var action = latestEvent.EventType switch
+            {
+                TaskEventType.Completed => "Vua hoan thanh",
+                TaskEventType.BugFixed => "Vua dong bug",
+                TaskEventType.Started => "Dang trien khai",
+                TaskEventType.Claimed or TaskEventType.Assigned => "Moi nhan",
+                TaskEventType.BugClaimed => "Dang xu ly bug",
+                _ => "Gan day dang xu ly"
+            };
+
+            return TrimTo($"{action} {latestEvent.TaskType.ToString().ToLowerInvariant()} {latestEvent.TitleSnapshot}", 220);
+        }
+
+        var recentMessage = memberMessages
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.Content));
+
+        if (recentMessage is not null)
+        {
+            return TrimTo(recentMessage.Content, 220);
+        }
+
+        if (dominantTopics.Count > 0)
+        {
+            return $"Dang tap trung vao {string.Join(", ", dominantTopics.Take(2))}.";
+        }
+
+        if (workload is not null && (workload.OpenTaskCount > 0 || workload.OpenBugCount > 0))
+        {
+            return $"Dang giu {workload.OpenTaskCount} task mo va {workload.OpenBugCount} bug.";
+        }
+
+        return "Chua ro focus hien tai.";
+    }
+
+    private static string BuildRecentOutputSummary(int completedTasksRecent, int fixedBugsRecent, IReadOnlyList<TaskEvent> memberEvents)
+    {
+        if (completedTasksRecent > 0 || fixedBugsRecent > 0)
+        {
+            return $"Trong {KnowledgeLookbackDays}d: done {completedTasksRecent} task, fix {fixedBugsRecent} bug.";
+        }
+
+        if (memberEvents.Count > 0)
+        {
+            return $"Trong {KnowledgeLookbackDays}d co {memberEvents.Count} task event, chua thay output hoan thanh ro.";
+        }
+
+        return $"Chua thay output ro trong {KnowledgeLookbackDays}d.";
+    }
+
+    private static string BuildStandupSummary(
+        int expectedDays,
+        int submittedDays,
+        int missingDays,
+        int lateDays,
+        int lateRatePercent,
+        int? averageLateMinutes,
+        int blockerDays)
+    {
+        if (expectedDays <= 0)
+        {
+            return $"Chua du standup signal trong {KnowledgeLookbackDays}d.";
+        }
+
+        var averageLateText = averageLateMinutes.HasValue ? $", tre TB {averageLateMinutes.Value}m" : string.Empty;
+        return $"Standup {submittedDays}/{expectedDays}, missing {missingDays}, late {lateDays} ({lateRatePercent}%){averageLateText}, blocker {blockerDays} ngay trong {KnowledgeLookbackDays}d.";
+    }
+
+    private static string BuildMemberRiskSummary(
+        AssistantMemberWorkload? workload,
+        int missingStandupDays,
+        int lateStandupRatePercent,
+        int blockerDays)
+    {
+        var parts = new List<string>();
+
+        if (missingStandupDays > 0)
+        {
+            parts.Add($"thieu standup {missingStandupDays} ngay");
+        }
+
+        if (lateStandupRatePercent >= 50)
+        {
+            parts.Add($"tre standup {lateStandupRatePercent}%");
+        }
+
+        if (blockerDays > 0)
+        {
+            parts.Add($"co blocker {blockerDays} ngay");
+        }
+
+        if (workload is not null)
+        {
+            if (workload.OpenPoints >= 8 || workload.OpenTaskCount >= 4)
+            {
+                parts.Add($"workload cao ({workload.OpenTaskCount} task, {workload.OpenPoints} points)");
+            }
+
+            if (workload.OpenBugCount >= 2)
+            {
+                parts.Add($"{workload.OpenBugCount} bug dang mo");
+            }
+        }
+
+        return parts.Count == 0
+            ? "Chua thay risk member noi bat."
+            : string.Join("; ", parts) + ".";
+    }
+
     private static int GetSeverityRank(string severity) => severity switch
     {
         "high" => 3,
         "medium" => 2,
         _ => 1
     };
+
+    private static Dictionary<ulong, string> BuildDisplayNameMap(IReadOnlyList<ProjectMemoryMessage> messages)
+    {
+        return messages
+            .Where(x => !string.IsNullOrWhiteSpace(x.AuthorName))
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .GroupBy(x => x.AuthorId)
+            .ToDictionary(x => x.Key, x => x.First().AuthorName);
+    }
+
+    private static AssistantStandupDisciplineSummary FilterStandupDiscipline(
+        AssistantStandupDisciplineSummary summary,
+        HashSet<ulong> ignoredUserIds)
+    {
+        var lateReporters = summary.LateReporters
+            .Where(x => !ignoredUserIds.Contains(x.DiscordUserId))
+            .ToList();
+        var missingReporters = summary.MissingReporters
+            .Where(x => !ignoredUserIds.Contains(x.DiscordUserId))
+            .ToList();
+        var removedReporterIds = summary.LateReporters
+            .Select(x => x.DiscordUserId)
+            .Concat(summary.MissingReporters.Select(x => x.DiscordUserId))
+            .Where(ignoredUserIds.Contains)
+            .Distinct()
+            .Count();
+
+        return new AssistantStandupDisciplineSummary(
+            summary.LookbackDays,
+            summary.DueTimeLocal,
+            Math.Max(0, summary.ExpectedReporterCount - removedReporterIds),
+            lateReporters,
+            missingReporters);
+    }
+
+    private static string ResolveDisplayName(IReadOnlyDictionary<ulong, string> displayNameLookup, ulong userId)
+    {
+        return displayNameLookup.TryGetValue(userId, out var displayName) && !string.IsNullOrWhiteSpace(displayName)
+            ? displayName
+            : $"<@{userId}>";
+    }
 
     private static void ObserveFirstActive(IDictionary<ulong, DateTime> map, ulong discordUserId, DateTime date)
     {
@@ -841,12 +1123,23 @@ public sealed record AssistantMemberProfile(
     string DisplayName,
     string RoleSummary,
     IReadOnlyList<string> SkillKeywords,
+    IReadOnlyList<string> DominantTopics,
     IReadOnlyList<string> ActiveChannels,
+    int MissingStandupDays,
+    int LateStandupRatePercent,
+    int? AverageLateMinutes,
+    int BlockerDays,
+    int CompletedTasksRecent,
+    int FixedBugsRecent,
     int OpenTaskCount,
     int OpenBugCount,
     int OpenPoints,
     int ReliabilityScore,
     int ConfidencePercent,
+    string StandupSummary,
+    string CurrentFocusSummary,
+    string RecentOutputSummary,
+    string RiskSummary,
     string EvidenceSummary);
 
 public sealed record AssistantMemberDailySignal(

@@ -112,7 +112,7 @@ public sealed class ProjectWeeklyReviewService(
         }
 
         return string.Join("\n", riskyMembers.Select(x =>
-            $"- <@{x.DiscordUserId}> `{x.RoleSummary}` | reliability `{x.ReliabilityScore}` | open `{x.OpenTaskCount}` task / `{x.OpenBugCount}` bug / `{x.OpenPoints}` points | confidence `{x.ConfidencePercent}`"));
+            $"- {x.DisplayName} (<@{x.DiscordUserId}>) `{x.RoleSummary}` | reliability `{x.ReliabilityScore}` | open `{x.OpenTaskCount}` task / `{x.OpenBugCount}` bug / `{x.OpenPoints}` points | standup `{x.StandupSummary}` | risk {x.RiskSummary}"));
     }
 
     private static string BuildTopicAndDecisionSection(ProjectAssistantContext context)
