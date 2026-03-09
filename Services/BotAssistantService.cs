@@ -47,6 +47,12 @@ public sealed class BotAssistantService(
             return BuildHelpResponse(insight);
         }
 
+        var deterministicReply = TryBuildDeterministicResponse(question, insight, intent);
+        if (!string.IsNullOrWhiteSpace(deterministicReply))
+        {
+            return ClampForDiscord(deterministicReply);
+        }
+
         if (!_options.Enabled || string.IsNullOrWhiteSpace(_options.ApiKey))
         {
             return ClampForDiscord(BuildFallbackResponse(question, insight, aiAvailable: false, intent));
@@ -1852,6 +1858,255 @@ public sealed class BotAssistantService(
         }
 
         return builder.Length == 0 ? null : builder.ToString();
+    }
+
+    private static string? TryBuildDeterministicResponse(
+        string question,
+        ProjectAssistantContext insight,
+        AssistantIntent intent)
+    {
+        var lowerQuestion = question.Trim().ToLowerInvariant();
+        if (!LooksLikeDeterministicFactQuery(lowerQuestion, intent))
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine($"Du an: `{insight.Scope.ProjectName}`");
+        builder.AppendLine($"Snapshot luc: `{insight.GeneratedAtLocal:yyyy-MM-dd HH:mm}`");
+
+        switch (intent)
+        {
+            case AssistantIntent.StandupDiscipline:
+                AppendDeterministicStandupFacts(builder, insight, lowerQuestion);
+                break;
+
+            case AssistantIntent.TaskExecution:
+                AppendDeterministicTaskFacts(builder, insight, lowerQuestion);
+                break;
+
+            case AssistantIntent.MemberInsights:
+                AppendDeterministicMemberFacts(builder, insight);
+                break;
+
+            case AssistantIntent.ProgressReview:
+                AppendDeterministicProgressFacts(builder, insight);
+                break;
+
+            default:
+                if (ContainsAny(lowerQuestion, "bao cao", "standup"))
+                {
+                    AppendDeterministicStandupFacts(builder, insight, lowerQuestion);
+                }
+                else if (ContainsAny(lowerQuestion, "task", "bug", "backlog", "dinh tre", "stalled"))
+                {
+                    AppendDeterministicTaskFacts(builder, insight, lowerQuestion);
+                }
+                else if (ContainsAny(lowerQuestion, "member", "thanh vien", "workload", "qua tai"))
+                {
+                    AppendDeterministicMemberFacts(builder, insight);
+                }
+                else
+                {
+                    AppendDeterministicProgressFacts(builder, insight);
+                }
+
+                break;
+        }
+
+        builder.AppendLine();
+        builder.Append("Luu y: day la cau tra loi tat dinh tu snapshot DB/memory hien co, khong qua dien giai AI.");
+        return builder.ToString().Trim();
+    }
+
+    private static bool LooksLikeDeterministicFactQuery(string lowerQuestion, AssistantIntent intent)
+    {
+        var hasFactCue = ContainsAny(
+            lowerQuestion,
+            "bao nhieu",
+            "co bao nhieu",
+            "con bao nhieu",
+            "so luong",
+            "tong so",
+            "tong cong",
+            "trang thai",
+            "status",
+            "count",
+            "ti le",
+            "phan tram",
+            "con lai",
+            "done bao nhieu",
+            "xong bao nhieu",
+            "mo bao nhieu",
+            "dong bao nhieu");
+
+        if (!hasFactCue)
+        {
+            return false;
+        }
+
+        return intent is AssistantIntent.General
+            or AssistantIntent.ProgressReview
+            or AssistantIntent.StandupDiscipline
+            or AssistantIntent.TaskExecution
+            or AssistantIntent.MemberInsights;
+    }
+
+    private static void AppendDeterministicProgressFacts(StringBuilder builder, ProjectAssistantContext insight)
+    {
+        builder.AppendLine();
+        if (!insight.Sprint.HasActiveSprint)
+        {
+            builder.AppendLine("Khong co sprint active.");
+            builder.AppendLine($"- Project backlog: `{insight.Sprint.ProjectBacklogCount}` task");
+            builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
+            return;
+        }
+
+        builder.AppendLine($"Sprint: `{insight.Sprint.Name}`");
+        builder.AppendLine($"- Task: total `{insight.Sprint.TotalTasks}` | done `{insight.Sprint.DoneTasks}` | todo `{insight.Sprint.TodoTasks}` | in-progress `{insight.Sprint.InProgressTasks}` | backlog-trong-sprint `{insight.Sprint.BacklogTasksInSprint}`");
+        builder.AppendLine($"- Point: total `{insight.Sprint.TotalPoints}` | done `{insight.Sprint.DonePoints}` | in-progress `{insight.Sprint.InProgressPoints}`");
+        builder.AppendLine($"- Project backlog ngoai sprint: `{insight.Sprint.ProjectBacklogCount}` task");
+        builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
+        builder.AppendLine($"- Delivery: `{insight.Sprint.DeliveryProgressPercent}%`");
+
+        if (insight.Sprint.ScheduleProgressPercent.HasValue)
+        {
+            builder.AppendLine($"- Timeline: `{insight.Sprint.ScheduleProgressPercent.Value}%`");
+        }
+
+        builder.AppendLine($"- Health: `{insight.Sprint.Health.Label}`");
+
+        if (insight.Sprint.Health.DeltaPercent.HasValue)
+        {
+            builder.AppendLine($"- Delta delivery vs timeline: `{insight.Sprint.Health.DeltaPercent.Value}%`");
+        }
+
+        if (insight.Sprint.EndDateLocal.HasValue)
+        {
+            var remainingDays = Math.Max(0, (insight.Sprint.EndDateLocal.Value.Date - insight.GeneratedAtLocal.Date).Days);
+            builder.AppendLine($"- Con lai: `{remainingDays}` ngay den `{insight.Sprint.EndDateLocal.Value:yyyy-MM-dd}`");
+        }
+    }
+
+    private static void AppendDeterministicStandupFacts(
+        StringBuilder builder,
+        ProjectAssistantContext insight,
+        string lowerQuestion)
+    {
+        var today = insight.GeneratedAtLocal.Date;
+        var reportsToday = insight.Standups
+            .Where(x => x.Date.Date == today)
+            .ToList();
+        var submittedToday = reportsToday
+            .Select(x => x.DiscordUserId)
+            .Distinct()
+            .Count();
+        var lateToday = reportsToday.Count(x => x.ReportedAtLocal.TimeOfDay > insight.StandupDiscipline.DueTimeLocal);
+        var blockerToday = reportsToday.Count(x => x.HasBlockers);
+        var missingToday = insight.StandupDiscipline.MissingReporters.Count(x => x.MissingToday);
+        var lateReporterCount = insight.StandupDiscipline.LateReporters.Count(x => x.LateReports > 0);
+
+        builder.AppendLine();
+        builder.AppendLine($"Standup due: `{insight.StandupDiscipline.DueTimeLocal:hh\\:mm}` | cua so: `{insight.StandupDiscipline.LookbackDays}` ngay");
+        builder.AppendLine($"- Expected reporters: `{insight.StandupDiscipline.ExpectedReporterCount}`");
+        builder.AppendLine($"- Da nop hom nay: `{submittedToday}`");
+        builder.AppendLine($"- Chua nop hom nay: `{missingToday}`");
+        builder.AppendLine($"- Bao cao co blocker hom nay: `{blockerToday}`");
+        builder.AppendLine($"- Bao cao tre hom nay: `{lateToday}`");
+        builder.AppendLine($"- So nguoi tung tre trong cua so theo doi: `{lateReporterCount}`");
+
+        if (ContainsAny(lowerQuestion, "ai", "nguoi nao"))
+        {
+            var lateLines = insight.StandupDiscipline.LateReporters
+                .Where(x => x.LateReports > 0)
+                .Take(3)
+                .Select(x => $"- Tre: {FormatMemberLabelV2(insight, x.DiscordUserId)} | `{x.LateReports}/{x.TotalReports}` lan | rate `{x.LateRatePercent}%`")
+                .ToList();
+            var missingLines = insight.StandupDiscipline.MissingReporters
+                .Where(x => x.MissingToday)
+                .Take(3)
+                .Select(x => $"- Chua nop hom nay: {FormatMemberLabelV2(insight, x.DiscordUserId)} | missing `{x.MissingDays}` ngay | basis `{x.BasisSummary}`")
+                .ToList();
+
+            if (lateLines.Count > 0 || missingLines.Count > 0)
+            {
+                builder.AppendLine("Danh sach noi bat:");
+                foreach (var line in lateLines.Concat(missingLines))
+                {
+                    builder.AppendLine(line);
+                }
+            }
+        }
+
+        builder.AppendLine("Ghi chu: missing reporters la heuristic tu open task assignees, recent standup reporters, va repeated project participants.");
+    }
+
+    private static void AppendDeterministicTaskFacts(
+        StringBuilder builder,
+        ProjectAssistantContext insight,
+        string lowerQuestion)
+    {
+        var overdueCount = insight.AttentionItems.Count(x => x.Kind == "overdue_task");
+        var unassignedCount = insight.AttentionItems.Count(x => x.Kind == "unassigned_task");
+        var highPointNotStartedCount = insight.AttentionItems.Count(x => x.Kind == "high_point_not_started");
+        var openBugAttentionCount = insight.AttentionItems.Count(x => x.Kind == "open_bug");
+
+        builder.AppendLine();
+        if (insight.Sprint.HasActiveSprint)
+        {
+            builder.AppendLine($"Task trong sprint `{insight.Sprint.Name}`:");
+            builder.AppendLine($"- Total `{insight.Sprint.TotalTasks}` | done `{insight.Sprint.DoneTasks}` | todo `{insight.Sprint.TodoTasks}` | in-progress `{insight.Sprint.InProgressTasks}` | backlog-trong-sprint `{insight.Sprint.BacklogTasksInSprint}`");
+        }
+
+        builder.AppendLine($"- Project backlog ngoai sprint: `{insight.Sprint.ProjectBacklogCount}`");
+        builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
+        builder.AppendLine($"- Stalled task: `{insight.StalledTasks.Count}`");
+        builder.AppendLine($"- Overdue task: `{overdueCount}`");
+        builder.AppendLine($"- Unassigned task: `{unassignedCount}`");
+        builder.AppendLine($"- High-point chua start: `{highPointNotStartedCount}`");
+        builder.AppendLine($"- Open-bug attention item: `{openBugAttentionCount}`");
+        builder.AppendLine($"- Task flow {insight.TaskFlow.LookbackDays} ngay: tao `{insight.TaskFlow.CreatedTasks}` | done `{insight.TaskFlow.CompletedTasks}` | mo bug `{insight.TaskFlow.CreatedBugs}` | dong bug `{insight.TaskFlow.FixedBugs}` | tra backlog `{insight.TaskFlow.ReturnedToBacklog}`");
+
+        if (ContainsAny(lowerQuestion, "ai", "owner", "nguoi nao"))
+        {
+            var topOwners = insight.MemberWorkloads
+                .Take(3)
+                .Select(x => $"- {FormatMemberLabelV2(insight, x.DiscordUserId)}: open `{x.OpenTaskCount}` task | bug `{x.OpenBugCount}` | points `{x.OpenPoints}`")
+                .ToList();
+
+            if (topOwners.Count > 0)
+            {
+                builder.AppendLine("Nguoi dang giu viec nhieu nhat:");
+                foreach (var line in topOwners)
+                {
+                    builder.AppendLine(line);
+                }
+            }
+        }
+    }
+
+    private static void AppendDeterministicMemberFacts(StringBuilder builder, ProjectAssistantContext insight)
+    {
+        builder.AppendLine();
+        builder.AppendLine($"Member profile tracked: `{insight.Knowledge.Members.Count}`");
+        builder.AppendLine($"Member dang giu viec: `{insight.MemberWorkloads.Count}`");
+
+        var topMembers = insight.MemberWorkloads
+            .Take(5)
+            .ToList();
+
+        if (topMembers.Count == 0)
+        {
+            builder.AppendLine("- Chua thay member nao dang giu task/bug mo.");
+            return;
+        }
+
+        foreach (var member in topMembers)
+        {
+            builder.AppendLine(
+                $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open `{member.OpenTaskCount}` task | in-progress `{member.InProgressTaskCount}` | bug `{member.OpenBugCount}` | points `{member.OpenPoints}` | recent-activity `{member.RecentActivityCount}`{FormatMemberConfidenceV2(insight, member.DiscordUserId)}");
+        }
     }
 
     private static bool ContainsAny(string source, params string[] keywords)
