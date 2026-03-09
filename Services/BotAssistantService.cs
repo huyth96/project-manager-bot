@@ -2002,6 +2002,7 @@ public sealed class BotAssistantService(
     {
         var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
         var asksSprintTaskList = LooksLikeSprintTaskQuery(lowerQuestion);
+        var asksStandupReliability = LooksLikeStandupReliabilityQuery(lowerQuestion);
 
         var hasFactCue = ContainsAny(
             lowerQuestion,
@@ -2022,7 +2023,8 @@ public sealed class BotAssistantService(
             "mo bao nhieu",
             "dong bao nhieu")
             || asksCompletedTaskList
-            || asksSprintTaskList;
+            || asksSprintTaskList
+            || asksStandupReliability;
 
         if (!hasFactCue)
         {
@@ -2129,6 +2131,8 @@ public sealed class BotAssistantService(
         var blockerToday = reportsToday.Count(x => x.HasBlockers);
         var missingToday = insight.StandupDiscipline.MissingReporters.Count(x => x.MissingToday);
         var lateReporterCount = insight.StandupDiscipline.LateReporters.Count(x => x.LateReports > 0);
+        var asksMissingOnly = AsksAboutMissingStandups(lowerQuestion) && !AsksAboutLateStandups(lowerQuestion);
+        var asksLateOnly = AsksAboutLateStandups(lowerQuestion) && !AsksAboutMissingStandups(lowerQuestion);
 
         builder.AppendLine();
         builder.AppendLine($"Standup due: `{insight.StandupDiscipline.DueTimeLocal:hh\\:mm}` | cua so: `{insight.StandupDiscipline.LookbackDays}` ngay");
@@ -2138,6 +2142,54 @@ public sealed class BotAssistantService(
         builder.AppendLine($"- Bao cao co blocker hom nay: `{blockerToday}`");
         builder.AppendLine($"- Bao cao tre hom nay: `{lateToday}`");
         builder.AppendLine($"- So nguoi tung tre trong cua so theo doi: `{lateReporterCount}`");
+
+        if (asksMissingOnly)
+        {
+            var missingLines = insight.StandupDiscipline.MissingReporters
+                .Take(5)
+                .Select(x => $"- Thieu: {FormatMemberLabelV2(insight, x.DiscordUserId)} | missing `{x.MissingDays}` ngay | da nop `{x.SubmittedDays}` ngay | basis `{x.BasisSummary}`")
+                .ToList();
+
+            builder.AppendLine("Nguoi hay thieu bao cao:");
+            if (missingLines.Count == 0)
+            {
+                builder.AppendLine("- Chua thay ai bi thieu bao cao trong cua so theo doi hien tai.");
+            }
+            else
+            {
+                foreach (var line in missingLines)
+                {
+                    builder.AppendLine(line);
+                }
+            }
+
+            builder.AppendLine("Ghi chu: danh sach nay chi tinh ngay thieu bao cao, khong cong ngay nop tre vao missing.");
+            return;
+        }
+
+        if (asksLateOnly)
+        {
+            var lateLines = insight.StandupDiscipline.LateReporters
+                .Where(x => x.LateReports > 0)
+                .Take(5)
+                .Select(x => $"- Tre: {FormatMemberLabelV2(insight, x.DiscordUserId)} | tre `{x.LateReports}/{x.TotalReports}` lan | dung gio `{x.OnTimeReports}` lan | rate `{x.LateRatePercent}%`")
+                .ToList();
+
+            builder.AppendLine("Nguoi hay tre bao cao:");
+            if (lateLines.Count == 0)
+            {
+                builder.AppendLine("- Chua thay ai nop tre trong cua so theo doi hien tai.");
+            }
+            else
+            {
+                foreach (var line in lateLines)
+                {
+                    builder.AppendLine(line);
+                }
+            }
+
+            return;
+        }
 
         if (ContainsAny(lowerQuestion, "ai", "nguoi nao"))
         {
@@ -2356,6 +2408,46 @@ public sealed class BotAssistantService(
     {
         return ContainsAny(lowerQuestion, "hoan thanh", "hoàn thành", "da xong", "đã xong", "done")
             && ContainsAny(lowerQuestion, "task", "nhung task nao", "những task nào", "task nao", "task nào");
+    }
+
+    private static bool LooksLikeStandupReliabilityQuery(string lowerQuestion)
+    {
+        return ContainsAny(lowerQuestion, "bao cao", "báo cáo", "standup")
+            && (ContainsAny(lowerQuestion, "ai", "nguoi nao", "người nào")
+                || AsksAboutMissingStandups(lowerQuestion)
+                || AsksAboutLateStandups(lowerQuestion)
+                || ContainsAny(lowerQuestion, "thuong xuyen", "thường xuyên", "hay"));
+    }
+
+    private static bool AsksAboutMissingStandups(string lowerQuestion)
+    {
+        return ContainsAny(
+            lowerQuestion,
+            "bo bao cao",
+            "bỏ báo cáo",
+            "khong nop",
+            "không nộp",
+            "chua nop",
+            "chưa nộp",
+            "thieu bao cao",
+            "thiếu báo cáo",
+            "vang mat",
+            "vắng mặt",
+            "miss");
+    }
+
+    private static bool AsksAboutLateStandups(string lowerQuestion)
+    {
+        return ContainsAny(
+            lowerQuestion,
+            "tre bao cao",
+            "trễ báo cáo",
+            "nop tre",
+            "nộp trễ",
+            "muon",
+            "muộn",
+            "dung gio",
+            "đúng giờ");
     }
 
     private static string? TryResolveRequestedTaskStatus(string lowerQuestion)
