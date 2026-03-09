@@ -145,6 +145,7 @@ public sealed class ProjectInsightService(
             .Where(x => x.Type == TaskItemType.Task && x.Status != TaskItemStatus.Done)
             .OrderBy(x => x.Id)
             .ToListAsync(cancellationToken);
+        var sprintCatalog = await LoadSprintCatalogAsync(db, project.Id, cancellationToken);
 
         IQueryable<TaskItem> sprintTasksQuery = projectTasksQuery.Where(x => x.SprintId == null);
         if (activeSprint is not null)
@@ -220,6 +221,7 @@ public sealed class ProjectInsightService(
             StandupDiscipline: standupDiscipline,
             TaskFlow: taskFlow,
             CompletedTasks: completedTasks,
+            SprintCatalog: sprintCatalog,
             MemberWorkloads: memberWorkloads,
             StalledTasks: stalledTasks,
             AttentionItems: attentionItems.Take(Math.Max(1, _options.MaxAttentionItems)).ToList(),
@@ -249,6 +251,68 @@ public sealed class ProjectInsightService(
         return events
             .GroupBy(x => x.TaskItemId)
             .ToDictionary(x => x.Key, x => x.First());
+    }
+
+    private async Task<List<AssistantSprintTaskList>> LoadSprintCatalogAsync(
+        BotDbContext db,
+        int projectId,
+        CancellationToken cancellationToken)
+    {
+        var sprints = await db.Sprints
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId)
+            .OrderByDescending(x => x.IsActive)
+            .ThenByDescending(x => x.EndDateLocal ?? x.StartDateLocal ?? DateTime.MinValue)
+            .ThenByDescending(x => x.Id)
+            .Take(6)
+            .ToListAsync(cancellationToken);
+
+        if (sprints.Count == 0)
+        {
+            return [];
+        }
+
+        var sprintIds = sprints.Select(x => x.Id).ToList();
+        var sprintTasks = await db.TaskItems
+            .AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.SprintId.HasValue && sprintIds.Contains(x.SprintId.Value) && x.Type == TaskItemType.Task)
+            .OrderBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        var tasksBySprint = sprintTasks
+            .GroupBy(x => x.SprintId!.Value)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        return sprints
+            .Select(sprint =>
+            {
+                var tasks = tasksBySprint.GetValueOrDefault(sprint.Id) ?? [];
+                var taskItems = tasks
+                    .OrderByDescending(x => x.Status == TaskItemStatus.Done)
+                    .ThenByDescending(x => x.Id)
+                    .Take(20)
+                    .Select(x => new AssistantSprintTaskItem(
+                        TaskId: x.Id,
+                        Title: x.Title,
+                        Status: x.Status.ToString(),
+                        Points: x.Points,
+                        AssigneeId: x.AssigneeId))
+                    .ToList();
+
+                return new AssistantSprintTaskList(
+                    SprintId: sprint.Id,
+                    Name: sprint.Name,
+                    Goal: sprint.Goal,
+                    IsActive: sprint.IsActive,
+                    StartDateLocal: sprint.StartDateLocal,
+                    EndDateLocal: sprint.EndDateLocal,
+                    TotalTasks: tasks.Count,
+                    DoneTasks: tasks.Count(x => x.Status == TaskItemStatus.Done),
+                    TodoTasks: tasks.Count(x => x.Status == TaskItemStatus.Todo),
+                    InProgressTasks: tasks.Count(x => x.Status == TaskItemStatus.InProgress),
+                    TaskItems: taskItems);
+            })
+            .ToList();
     }
 
     private async Task<List<TaskEvent>> LoadRecentTaskEventsAsync(
@@ -1107,6 +1171,7 @@ public sealed record ProjectAssistantContext(
     AssistantStandupDisciplineSummary StandupDiscipline,
     AssistantTaskFlowSummary TaskFlow,
     IReadOnlyList<AssistantCompletedTask> CompletedTasks,
+    IReadOnlyList<AssistantSprintTaskList> SprintCatalog,
     IReadOnlyList<AssistantMemberWorkload> MemberWorkloads,
     IReadOnlyList<AssistantStalledTask> StalledTasks,
     IReadOnlyList<AssistantAttentionItem> AttentionItems,
@@ -1207,6 +1272,26 @@ public sealed record AssistantCompletedTask(
     int Points,
     ulong? AssigneeId,
     bool IsInActiveSprint);
+
+public sealed record AssistantSprintTaskList(
+    int SprintId,
+    string Name,
+    string Goal,
+    bool IsActive,
+    DateTime? StartDateLocal,
+    DateTime? EndDateLocal,
+    int TotalTasks,
+    int DoneTasks,
+    int TodoTasks,
+    int InProgressTasks,
+    IReadOnlyList<AssistantSprintTaskItem> TaskItems);
+
+public sealed record AssistantSprintTaskItem(
+    int TaskId,
+    string Title,
+    string Status,
+    int Points,
+    ulong? AssigneeId);
 
 public sealed record AssistantMemberWorkload(
     ulong DiscordUserId,

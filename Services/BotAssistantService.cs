@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Discord.WebSocket;
 using Microsoft.Extensions.Options;
 using ProjectManagerBot.Options;
@@ -1177,6 +1178,34 @@ public sealed class BotAssistantService(
                     x.IsInActiveSprint
                 })
                 .ToList(),
+            sprints = insight.SprintCatalog
+                .Take(4)
+                .Select(x => new
+                {
+                    x.SprintId,
+                    x.Name,
+                    x.Goal,
+                    x.IsActive,
+                    x.StartDateLocal,
+                    x.EndDateLocal,
+                    x.TotalTasks,
+                    x.DoneTasks,
+                    x.TodoTasks,
+                    x.InProgressTasks,
+                    tasks = x.TaskItems
+                        .Take(6)
+                        .Select(task => new
+                        {
+                            task.TaskId,
+                            task.Title,
+                            task.Status,
+                            task.Points,
+                            task.AssigneeId,
+                            AssigneeName = task.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, task.AssigneeId.Value) : null
+                        })
+                        .ToList()
+                })
+                .ToList(),
             stalledTasks = insight.StalledTasks
                 .Take(maxStalledTasks)
                 .Select(x => new
@@ -1626,6 +1655,33 @@ public sealed class BotAssistantService(
                     x.IsInActiveSprint
                 })
                 .ToList(),
+            sprints = insight.SprintCatalog
+                .Take(4)
+                .Select(x => new
+                {
+                    x.SprintId,
+                    x.Name,
+                    x.Goal,
+                    x.IsActive,
+                    x.StartDateLocal,
+                    x.EndDateLocal,
+                    x.TotalTasks,
+                    x.DoneTasks,
+                    x.TodoTasks,
+                    x.InProgressTasks,
+                    tasks = x.TaskItems
+                        .Take(6)
+                        .Select(task => new
+                        {
+                            task.TaskId,
+                            task.Title,
+                            task.Status,
+                            task.Points,
+                            task.AssigneeId
+                        })
+                        .ToList()
+                })
+                .ToList(),
             stalledTasks = insight.StalledTasks
                 .Take(maxStalledTasks)
                 .Select(x => new
@@ -1913,7 +1969,7 @@ public sealed class BotAssistantService(
                 break;
 
             case AssistantIntent.ProgressReview:
-                AppendDeterministicProgressFacts(builder, insight);
+                AppendDeterministicProgressFacts(builder, insight, lowerQuestion);
                 break;
 
             default:
@@ -1931,7 +1987,7 @@ public sealed class BotAssistantService(
                 }
                 else
                 {
-                    AppendDeterministicProgressFacts(builder, insight);
+                    AppendDeterministicProgressFacts(builder, insight, lowerQuestion);
                 }
 
                 break;
@@ -1944,8 +2000,8 @@ public sealed class BotAssistantService(
 
     private static bool LooksLikeDeterministicFactQuery(string lowerQuestion, AssistantIntent intent)
     {
-        var asksCompletedTaskList = ContainsAny(lowerQuestion, "hoan thanh", "da xong", "done")
-            && ContainsAny(lowerQuestion, "task", "nhung task nao", "task nao");
+        var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
+        var asksSprintTaskList = LooksLikeSprintTaskQuery(lowerQuestion);
 
         var hasFactCue = ContainsAny(
             lowerQuestion,
@@ -1965,7 +2021,8 @@ public sealed class BotAssistantService(
             "xong bao nhieu",
             "mo bao nhieu",
             "dong bao nhieu")
-            || asksCompletedTaskList;
+            || asksCompletedTaskList
+            || asksSprintTaskList;
 
         if (!hasFactCue)
         {
@@ -1979,9 +2036,48 @@ public sealed class BotAssistantService(
             or AssistantIntent.MemberInsights;
     }
 
-    private static void AppendDeterministicProgressFacts(StringBuilder builder, ProjectAssistantContext insight)
+    private static void AppendDeterministicProgressFacts(
+        StringBuilder builder,
+        ProjectAssistantContext insight,
+        string lowerQuestion)
     {
         builder.AppendLine();
+        if (WantsPerSprintBreakdown(lowerQuestion))
+        {
+            if (insight.SprintCatalog.Count == 0)
+            {
+                builder.AppendLine("Khong tim thay sprint nao trong project.");
+                return;
+            }
+
+            builder.AppendLine("Tong quan tung sprint:");
+            foreach (var sprint in insight.SprintCatalog.Take(6))
+            {
+                builder.AppendLine(
+                    $"- `{sprint.Name}`{(sprint.IsActive ? " (active)" : string.Empty)} | total `{sprint.TotalTasks}` | done `{sprint.DoneTasks}` | todo `{sprint.TodoTasks}` | in-progress `{sprint.InProgressTasks}`");
+            }
+
+            return;
+        }
+
+        var requestedSprint = TryResolveRequestedSprint(insight, lowerQuestion);
+        if (requestedSprint is not null && !LooksLikeSprintTaskQuery(lowerQuestion))
+        {
+            builder.AppendLine($"Sprint: `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (active)" : string.Empty)}");
+            builder.AppendLine($"- Task: total `{requestedSprint.TotalTasks}` | done `{requestedSprint.DoneTasks}` | todo `{requestedSprint.TodoTasks}` | in-progress `{requestedSprint.InProgressTasks}`");
+            if (requestedSprint.StartDateLocal.HasValue || requestedSprint.EndDateLocal.HasValue)
+            {
+                builder.AppendLine($"- Timeline: `{requestedSprint.StartDateLocal:yyyy-MM-dd}` -> `{requestedSprint.EndDateLocal:yyyy-MM-dd}`");
+            }
+
+            if (!string.IsNullOrWhiteSpace(requestedSprint.Goal))
+            {
+                builder.AppendLine($"- Goal: {requestedSprint.Goal}");
+            }
+
+            return;
+        }
+
         if (!insight.Sprint.HasActiveSprint)
         {
             builder.AppendLine("Khong co sprint active.");
@@ -2095,8 +2191,74 @@ public sealed class BotAssistantService(
         builder.AppendLine($"- Open-bug attention item: `{openBugAttentionCount}`");
         builder.AppendLine($"- Task flow {insight.TaskFlow.LookbackDays} ngay: tao `{insight.TaskFlow.CreatedTasks}` | done `{insight.TaskFlow.CompletedTasks}` | mo bug `{insight.TaskFlow.CreatedBugs}` | dong bug `{insight.TaskFlow.FixedBugs}` | tra backlog `{insight.TaskFlow.ReturnedToBacklog}`");
 
-        var asksCompletedTaskList = ContainsAny(lowerQuestion, "hoan thanh", "da xong", "done")
-            && ContainsAny(lowerQuestion, "task", "nhung task nao", "task nao");
+        var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
+        var asksPerSprintBreakdown = WantsPerSprintBreakdown(lowerQuestion);
+        var requestedSprint = TryResolveRequestedSprint(insight, lowerQuestion);
+        var requestedStatus = TryResolveRequestedTaskStatus(lowerQuestion);
+
+        if (asksPerSprintBreakdown)
+        {
+            if (insight.SprintCatalog.Count == 0)
+            {
+                builder.AppendLine("- Khong tim thay sprint nao trong project.");
+                return;
+            }
+
+            builder.AppendLine("Task theo tung sprint:");
+            foreach (var sprint in insight.SprintCatalog.Take(4))
+            {
+                var sprintTasks = FilterSprintTaskItems(sprint, requestedStatus);
+                builder.AppendLine(
+                    $"- `{sprint.Name}`{(sprint.IsActive ? " (active)" : string.Empty)} | total `{sprint.TotalTasks}` | done `{sprint.DoneTasks}` | todo `{sprint.TodoTasks}` | in-progress `{sprint.InProgressTasks}`");
+
+                var lines = sprintTasks
+                    .Take(5)
+                    .Select(task => FormatSprintTaskLine(insight, task))
+                    .ToList();
+
+                if (lines.Count == 0)
+                {
+                    builder.AppendLine("  - Khong co task nao khop bo loc trong sprint nay.");
+                }
+                else
+                {
+                    foreach (var line in lines)
+                    {
+                        builder.AppendLine($"  {line}");
+                    }
+                }
+            }
+
+            return;
+        }
+
+        if (requestedSprint is not null)
+        {
+            var sprintTasks = FilterSprintTaskItems(requestedSprint, requestedStatus);
+            builder.AppendLine($"Task trong `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (active)" : string.Empty)}:");
+            builder.AppendLine(
+                $"- Total `{requestedSprint.TotalTasks}` | done `{requestedSprint.DoneTasks}` | todo `{requestedSprint.TodoTasks}` | in-progress `{requestedSprint.InProgressTasks}`");
+
+            var lines = sprintTasks
+                .Take(10)
+                .Select(task => FormatSprintTaskLine(insight, task))
+                .ToList();
+
+            if (lines.Count == 0)
+            {
+                builder.AppendLine("- Khong tim thay task nao khop trong sprint nay.");
+            }
+            else
+            {
+                foreach (var line in lines)
+                {
+                    builder.AppendLine(line);
+                }
+            }
+
+            return;
+        }
+
         if (asksCompletedTaskList)
         {
             var completedTasks = insight.CompletedTasks.Take(8).ToList();
@@ -2157,6 +2319,122 @@ public sealed class BotAssistantService(
             builder.AppendLine(
                 $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open `{member.OpenTaskCount}` task | in-progress `{member.InProgressTaskCount}` | bug `{member.OpenBugCount}` | points `{member.OpenPoints}` | recent-activity `{member.RecentActivityCount}`{FormatMemberConfidenceV2(insight, member.DiscordUserId)}");
         }
+    }
+
+    private static bool LooksLikeSprintTaskQuery(string lowerQuestion)
+    {
+        var mentionsSprint = lowerQuestion.Contains("sprint", StringComparison.Ordinal);
+        var mentionsTask = ContainsAny(
+            lowerQuestion,
+            "task",
+            "cong viec",
+            "công việc",
+            "bug",
+            "backlog");
+        var mentionsStatus = TryResolveRequestedTaskStatus(lowerQuestion) is not null;
+
+        return WantsPerSprintBreakdown(lowerQuestion)
+            || (mentionsSprint && (mentionsTask || mentionsStatus));
+    }
+
+    private static bool WantsPerSprintBreakdown(string lowerQuestion)
+    {
+        return ContainsAny(
+            lowerQuestion,
+            "tung sprint",
+            "từng sprint",
+            "moi sprint",
+            "mỗi sprint",
+            "cac sprint",
+            "các sprint",
+            "theo sprint",
+            "tat ca sprint",
+            "tất cả sprint");
+    }
+
+    private static bool WantsCompletedTasksOnly(string lowerQuestion)
+    {
+        return ContainsAny(lowerQuestion, "hoan thanh", "hoàn thành", "da xong", "đã xong", "done")
+            && ContainsAny(lowerQuestion, "task", "nhung task nao", "những task nào", "task nao", "task nào");
+    }
+
+    private static string? TryResolveRequestedTaskStatus(string lowerQuestion)
+    {
+        if (ContainsAny(lowerQuestion, "hoan thanh", "hoàn thành", "da xong", "đã xong", "done"))
+        {
+            return "Done";
+        }
+
+        if (ContainsAny(lowerQuestion, "in-progress", "in progress", "dang lam", "đang làm"))
+        {
+            return "InProgress";
+        }
+
+        if (ContainsAny(lowerQuestion, "todo", "chua bat dau", "chưa bắt đầu"))
+        {
+            return "Todo";
+        }
+
+        if (ContainsAny(lowerQuestion, "backlog"))
+        {
+            return "Backlog";
+        }
+
+        return null;
+    }
+
+    private static AssistantSprintTaskList? TryResolveRequestedSprint(ProjectAssistantContext insight, string lowerQuestion)
+    {
+        if (insight.SprintCatalog.Count == 0)
+        {
+            return null;
+        }
+
+        if (ContainsAny(lowerQuestion, "sprint nay", "sprint hiện tại", "sprint hien tai", "active sprint", "current sprint"))
+        {
+            return insight.SprintCatalog.FirstOrDefault(x => x.IsActive) ?? insight.SprintCatalog.FirstOrDefault();
+        }
+
+        var idMatch = Regex.Match(lowerQuestion, @"\bsprint\s*#?\s*(\d+)\b", RegexOptions.IgnoreCase);
+        if (idMatch.Success && int.TryParse(idMatch.Groups[1].Value, out var sprintNumber))
+        {
+            return insight.SprintCatalog.FirstOrDefault(x =>
+                x.SprintId == sprintNumber
+                || x.Name.Contains($"sprint {sprintNumber}", StringComparison.OrdinalIgnoreCase)
+                || x.Name.Contains($"#{sprintNumber}", StringComparison.OrdinalIgnoreCase));
+        }
+
+        return insight.SprintCatalog.FirstOrDefault(x =>
+            !string.IsNullOrWhiteSpace(x.Name)
+            && lowerQuestion.Contains(x.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static List<AssistantSprintTaskItem> FilterSprintTaskItems(
+        AssistantSprintTaskList sprint,
+        string? requestedStatus)
+    {
+        var taskQuery = sprint.TaskItems.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(requestedStatus))
+        {
+            taskQuery = taskQuery.Where(x => string.Equals(x.Status, requestedStatus, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return taskQuery
+            .OrderByDescending(x => x.Status.Equals("InProgress", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.Status.Equals("Todo", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.Status.Equals("Done", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.TaskId)
+            .ToList();
+    }
+
+    private static string FormatSprintTaskLine(ProjectAssistantContext insight, AssistantSprintTaskItem task)
+    {
+        var owner = task.AssigneeId.HasValue
+            ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+            : " | chua assign";
+
+        return $"- #{task.TaskId} {task.Title} | `{task.Status}` | `{task.Points}d`{owner}";
     }
 
     private static bool ContainsAny(string source, params string[] keywords)
