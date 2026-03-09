@@ -267,7 +267,11 @@ public sealed class ProjectKnowledgeService(
         var result = new List<MemberDailySignal>();
         foreach (var pair in firstActiveDates.OrderBy(x => x.Key))
         {
-            for (var date = pair.Value.Date; date <= today; date = date.AddDays(1))
+            var signalStartDate = pair.Value.Date < fromDate.Date
+                ? fromDate.Date
+                : pair.Value.Date;
+
+            for (var date = signalStartDate; date <= today; date = date.AddDays(1))
             {
                 var standup = reportLookup[(pair.Key, date)].FirstOrDefault();
                 var messageCount = messageLookup[(pair.Key, date)].Count();
