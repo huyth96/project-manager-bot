@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProjectManagerBot.Data;
@@ -15,6 +16,7 @@ public sealed class ProjectKnowledgeService(
     private const int TopicLookbackDays = 7;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan StandupDueTime = new(9, 30, 0);
+    private static readonly ConcurrentDictionary<int, SemaphoreSlim> ProjectKnowledgeLocks = new();
     private static readonly Dictionary<string, string[]> TopicKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         ["auth"] = ["auth", "login", "signin", "sign in", "token", "oauth", "permission"],
@@ -52,99 +54,121 @@ public sealed class ProjectKnowledgeService(
         IReadOnlyList<AssistantAttentionItem> attentionItems,
         CancellationToken cancellationToken = default)
     {
-        var today = _studioTime.LocalDate.Date;
-        var knowledgeFromDate = today.AddDays(-(KnowledgeLookbackDays - 1));
-        var topicFromDate = today.AddDays(-(TopicLookbackDays - 1));
+        var projectGate = ProjectKnowledgeLocks.GetOrAdd(projectId, static _ => new SemaphoreSlim(1, 1));
+        await projectGate.WaitAsync(cancellationToken);
+        try
+        {
+            var today = _studioTime.LocalDate.Date;
+            var knowledgeFromDate = today.AddDays(-(KnowledgeLookbackDays - 1));
+            var topicFromDate = today.AddDays(-(TopicLookbackDays - 1));
 
-        await _projectMemoryService.EnsureDailyDigestsAsync(projectId, topicFromDate, today, cancellationToken);
+            await _projectMemoryService.EnsureDailyDigestsAsync(projectId, topicFromDate, today, cancellationToken);
 
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        await EnsureTaskEventBaselinesAsync(db, projectId, cancellationToken);
+            await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            await EnsureTaskEventBaselinesAsync(db, projectId, cancellationToken);
 
-        var messages = await db.ProjectMemoryMessages
-            .AsNoTracking()
-            .Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate)
-            .ToListAsync(cancellationToken);
-        messages = messages
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .ThenByDescending(x => x.Id)
-            .ToList();
-        var botUserIds = messages
-            .Where(x => x.IsBot)
-            .Select(x => x.AuthorId)
-            .ToHashSet();
-        botUserIds.Add(0);
-        var humanMessages = messages
-            .Where(x => !x.IsBot)
-            .ToList();
-        var displayNameLookup = BuildDisplayNameMap(humanMessages);
-        var filteredStandups = standups
-            .Where(x => !botUserIds.Contains(x.DiscordUserId))
-            .ToList();
-        var filteredStandupDiscipline = FilterStandupDiscipline(standupDiscipline, botUserIds);
-        var filteredMemberWorkloads = memberWorkloads
-            .Where(x => !botUserIds.Contains(x.DiscordUserId))
-            .ToList();
-        var filteredStalledTasks = stalledTasks
-            .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
-            .ToList();
-        var filteredAttentionItems = attentionItems
-            .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
-            .ToList();
+            var messages = await db.ProjectMemoryMessages
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate)
+                .ToListAsync(cancellationToken);
+            messages = messages
+                .OrderByDescending(x => x.CreatedAtUtc)
+                .ThenByDescending(x => x.Id)
+                .ToList();
+            var botUserIds = messages
+                .Where(x => x.IsBot)
+                .Select(x => x.AuthorId)
+                .ToHashSet();
+            botUserIds.Add(0);
+            var humanMessages = messages
+                .Where(x => !x.IsBot)
+                .ToList();
+            var displayNameLookup = BuildDisplayNameMap(humanMessages);
+            var filteredStandups = standups
+                .Where(x => !botUserIds.Contains(x.DiscordUserId))
+                .ToList();
+            var filteredStandupDiscipline = FilterStandupDiscipline(standupDiscipline, botUserIds);
+            var filteredMemberWorkloads = memberWorkloads
+                .Where(x => !botUserIds.Contains(x.DiscordUserId))
+                .ToList();
+            var filteredStalledTasks = stalledTasks
+                .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
+                .ToList();
+            var filteredAttentionItems = attentionItems
+                .Where(x => !x.AssigneeId.HasValue || !botUserIds.Contains(x.AssigneeId.Value))
+                .ToList();
 
-        var digests = await db.ProjectDailyDigests
-            .AsNoTracking()
-            .Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate)
-            .OrderByDescending(x => x.LocalDate)
-            .ToListAsync(cancellationToken);
+            var digests = await db.ProjectDailyDigests
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate)
+                .OrderByDescending(x => x.LocalDate)
+                .ToListAsync(cancellationToken);
 
-        var taskEvents = await db.TaskEvents
-            .AsNoTracking()
-            .Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate)
-            .OrderByDescending(x => x.OccurredAtUtc)
-            .ThenByDescending(x => x.Id)
-            .ToListAsync(cancellationToken);
-        taskEvents = taskEvents
-            .Where(x => !x.ActorDiscordId.HasValue || !botUserIds.Contains(x.ActorDiscordId.Value))
-            .ToList();
+            var taskEvents = await db.TaskEvents
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate)
+                .OrderByDescending(x => x.OccurredAtUtc)
+                .ThenByDescending(x => x.Id)
+                .ToListAsync(cancellationToken);
+            taskEvents = taskEvents
+                .Where(x => !x.ActorDiscordId.HasValue || !botUserIds.Contains(x.ActorDiscordId.Value))
+                .ToList();
 
-        var taskCreations = await db.TaskItems
-            .AsNoTracking()
-            .Where(x => x.ProjectId == projectId)
-            .Select(x => new TaskCreationSeed(x.Id, x.AssigneeId, x.CreatedAtUtc))
-            .ToListAsync(cancellationToken);
+            var taskCreations = await db.TaskItems
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId)
+                .Select(x => new TaskCreationSeed(x.Id, x.AssigneeId, x.CreatedAtUtc))
+                .ToListAsync(cancellationToken);
 
-        var topicMentions = BuildTopicMentions(projectId, topicFromDate, humanMessages, digests);
-        var memberSignals = BuildMemberSignals(
-            projectId,
-            knowledgeFromDate,
-            humanMessages,
-            filteredStandups,
-            taskEvents,
-            taskCreations,
-            filteredMemberWorkloads,
-            botUserIds);
-        var decisionLogs = BuildDecisionLogs(projectId, topicFromDate, humanMessages);
-        var riskLogs = BuildRiskLogs(projectId, today, humanMessages, filteredStandups, filteredAttentionItems, filteredStalledTasks, displayNameLookup);
-        var memberProfiles = BuildMemberProfiles(projectId, humanMessages, filteredStandups, taskEvents, memberSignals, filteredMemberWorkloads, displayNameLookup, botUserIds);
+            var topicMentions = BuildTopicMentions(projectId, topicFromDate, humanMessages, digests)
+                .GroupBy(x => new { x.ProjectId, Date = x.LocalDate.Date, x.TopicKey })
+                .Select(x => x
+                    .OrderByDescending(y => y.MentionCount)
+                    .ThenByDescending(y => y.DistinctAuthorCount)
+                    .First())
+                .ToList();
+            var memberSignals = BuildMemberSignals(
+                    projectId,
+                    knowledgeFromDate,
+                    humanMessages,
+                    filteredStandups,
+                    taskEvents,
+                    taskCreations,
+                    filteredMemberWorkloads,
+                    botUserIds)
+                .GroupBy(x => new { x.ProjectId, x.DiscordUserId, Date = x.LocalDate.Date })
+                .Select(x => x
+                    .OrderByDescending(y => y.SubmittedStandup)
+                    .ThenByDescending(y => y.ActivityCount)
+                    .ThenByDescending(y => y.ReliabilityScore)
+                    .First())
+                .ToList();
+            var decisionLogs = BuildDecisionLogs(projectId, topicFromDate, humanMessages);
+            var riskLogs = BuildRiskLogs(projectId, today, humanMessages, filteredStandups, filteredAttentionItems, filteredStalledTasks, displayNameLookup);
+            var memberProfiles = BuildMemberProfiles(projectId, humanMessages, filteredStandups, taskEvents, memberSignals, filteredMemberWorkloads, displayNameLookup, botUserIds);
 
-        ReplaceDateRange(db.TopicMentions, db.TopicMentions.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
-        ReplaceDateRange(db.MemberDailySignals, db.MemberDailySignals.Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate));
-        ReplaceDateRange(db.DecisionLogs, db.DecisionLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
-        ReplaceDateRange(db.RiskLogs, db.RiskLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
-        await db.SaveChangesAsync(cancellationToken);
+            ReplaceDateRange(db.TopicMentions, db.TopicMentions.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
+            ReplaceDateRange(db.MemberDailySignals, db.MemberDailySignals.Where(x => x.ProjectId == projectId && x.LocalDate >= knowledgeFromDate));
+            ReplaceDateRange(db.DecisionLogs, db.DecisionLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
+            ReplaceDateRange(db.RiskLogs, db.RiskLogs.Where(x => x.ProjectId == projectId && x.LocalDate >= topicFromDate));
+            await db.SaveChangesAsync(cancellationToken);
 
-        db.TopicMentions.AddRange(topicMentions);
-        db.MemberDailySignals.AddRange(memberSignals);
-        db.DecisionLogs.AddRange(decisionLogs);
-        db.RiskLogs.AddRange(riskLogs);
-        UpsertMemberProfiles(db, projectId, memberProfiles);
-        UpsertSprintSnapshot(db, projectId, today, sprint, stalledTasks, attentionItems);
-        UpsertRiskSnapshot(db, projectId, today, filteredStandups, filteredStandupDiscipline, filteredAttentionItems, filteredStalledTasks, sprint.OpenBugCount);
+            db.TopicMentions.AddRange(topicMentions);
+            db.MemberDailySignals.AddRange(memberSignals);
+            db.DecisionLogs.AddRange(decisionLogs);
+            db.RiskLogs.AddRange(riskLogs);
+            UpsertMemberProfiles(db, projectId, memberProfiles);
+            UpsertSprintSnapshot(db, projectId, today, sprint, stalledTasks, attentionItems);
+            UpsertRiskSnapshot(db, projectId, today, filteredStandups, filteredStandupDiscipline, filteredAttentionItems, filteredStalledTasks, sprint.OpenBugCount);
 
-        await db.SaveChangesAsync(cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
 
-        return await LoadAssistantKnowledgeAsync(db, projectId, topicFromDate, memberProfiles, memberSignals, topicMentions, decisionLogs, riskLogs, cancellationToken);
+            return await LoadAssistantKnowledgeAsync(db, projectId, topicFromDate, memberProfiles, memberSignals, topicMentions, decisionLogs, riskLogs, cancellationToken);
+        }
+        finally
+        {
+            projectGate.Release();
+        }
     }
 
     private async Task EnsureTaskEventBaselinesAsync(BotDbContext db, int projectId, CancellationToken cancellationToken)
