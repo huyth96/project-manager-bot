@@ -2048,8 +2048,6 @@ public sealed class BotAssistantService(
                 break;
         }
 
-        builder.AppendLine();
-        builder.Append("Lưu ý: đây là câu trả lời tất định từ snapshot DB/memory hiện có, không qua diễn giải AI.");
         return builder.ToString().Trim();
     }
 
@@ -2113,15 +2111,15 @@ public sealed class BotAssistantService(
         {
             if (insight.SprintCatalog.Count == 0)
             {
-                builder.AppendLine("Khong tim thay sprint nao trong project.");
+                builder.AppendLine("Không tìm thấy sprint nào trong dự án.");
                 return;
             }
 
-            builder.AppendLine("Tong quan tung sprint:");
+            builder.AppendLine("Tổng quan từng sprint:");
             foreach (var sprint in insight.SprintCatalog.Take(6))
             {
                 builder.AppendLine(
-                    $"- `{sprint.Name}`{(sprint.IsActive ? " (active)" : string.Empty)} | total `{sprint.TotalTasks}` | done `{sprint.DoneTasks}` | todo `{sprint.TodoTasks}` | in-progress `{sprint.InProgressTasks}`");
+                    $"- `{sprint.Name}`{(sprint.IsActive ? " (đang chạy)" : string.Empty)} | tổng `{sprint.TotalTasks}` | hoàn thành `{sprint.DoneTasks}` | chưa làm `{sprint.TodoTasks}` | đang làm `{sprint.InProgressTasks}`");
             }
 
             return;
@@ -2130,16 +2128,16 @@ public sealed class BotAssistantService(
         var requestedSprint = TryResolveRequestedSprint(insight, lowerQuestion);
         if (requestedSprint is not null && !LooksLikeSprintTaskQuery(lowerQuestion))
         {
-            builder.AppendLine($"Sprint: `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (active)" : string.Empty)}");
-            builder.AppendLine($"- Task: total `{requestedSprint.TotalTasks}` | done `{requestedSprint.DoneTasks}` | todo `{requestedSprint.TodoTasks}` | in-progress `{requestedSprint.InProgressTasks}`");
+            builder.AppendLine($"Sprint: `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (đang chạy)" : string.Empty)}");
+            builder.AppendLine($"- Task: tổng `{requestedSprint.TotalTasks}` | hoàn thành `{requestedSprint.DoneTasks}` | chưa làm `{requestedSprint.TodoTasks}` | đang làm `{requestedSprint.InProgressTasks}`");
             if (requestedSprint.StartDateLocal.HasValue || requestedSprint.EndDateLocal.HasValue)
             {
-                builder.AppendLine($"- Timeline: `{requestedSprint.StartDateLocal:yyyy-MM-dd}` -> `{requestedSprint.EndDateLocal:yyyy-MM-dd}`");
+                builder.AppendLine($"- Thời gian: `{requestedSprint.StartDateLocal:yyyy-MM-dd}` -> `{requestedSprint.EndDateLocal:yyyy-MM-dd}`");
             }
 
             if (!string.IsNullOrWhiteSpace(requestedSprint.Goal))
             {
-                builder.AppendLine($"- Goal: {requestedSprint.Goal}");
+                builder.AppendLine($"- Mục tiêu: {requestedSprint.Goal}");
             }
 
             return;
@@ -2147,35 +2145,35 @@ public sealed class BotAssistantService(
 
         if (!insight.Sprint.HasActiveSprint)
         {
-            builder.AppendLine("Khong co sprint active.");
-            builder.AppendLine($"- Project backlog: `{insight.Sprint.ProjectBacklogCount}` task");
-            builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
+            builder.AppendLine("Không có sprint đang chạy.");
+            builder.AppendLine($"- Backlog dự án: `{insight.Sprint.ProjectBacklogCount}` task");
+            builder.AppendLine($"- Bug mở: `{insight.Sprint.OpenBugCount}`");
             return;
         }
 
         builder.AppendLine($"Sprint: `{insight.Sprint.Name}`");
-        builder.AppendLine($"- Task: total `{insight.Sprint.TotalTasks}` | done `{insight.Sprint.DoneTasks}` | todo `{insight.Sprint.TodoTasks}` | in-progress `{insight.Sprint.InProgressTasks}` | backlog-trong-sprint `{insight.Sprint.BacklogTasksInSprint}`");
-        builder.AppendLine($"- Point: total `{insight.Sprint.TotalPoints}` | done `{insight.Sprint.DonePoints}` | in-progress `{insight.Sprint.InProgressPoints}`");
-        builder.AppendLine($"- Project backlog ngoai sprint: `{insight.Sprint.ProjectBacklogCount}` task");
-        builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
-        builder.AppendLine($"- Delivery: `{insight.Sprint.DeliveryProgressPercent}%`");
+        builder.AppendLine($"- Task: tổng `{insight.Sprint.TotalTasks}` | hoàn thành `{insight.Sprint.DoneTasks}` | chưa làm `{insight.Sprint.TodoTasks}` | đang làm `{insight.Sprint.InProgressTasks}` | backlog trong sprint `{insight.Sprint.BacklogTasksInSprint}`");
+        builder.AppendLine($"- Điểm: tổng `{insight.Sprint.TotalPoints}` | hoàn thành `{insight.Sprint.DonePoints}` | đang làm `{insight.Sprint.InProgressPoints}`");
+        builder.AppendLine($"- Backlog dự án ngoài sprint: `{insight.Sprint.ProjectBacklogCount}` task");
+        builder.AppendLine($"- Bug mở: `{insight.Sprint.OpenBugCount}`");
+        builder.AppendLine($"- Tiến độ giao hàng: `{insight.Sprint.DeliveryProgressPercent}%`");
 
         if (insight.Sprint.ScheduleProgressPercent.HasValue)
         {
             builder.AppendLine($"- Timeline: `{insight.Sprint.ScheduleProgressPercent.Value}%`");
         }
 
-        builder.AppendLine($"- Health: `{insight.Sprint.Health.Label}`");
+        builder.AppendLine($"- Sức khỏe sprint: `{insight.Sprint.Health.Label}`");
 
         if (insight.Sprint.Health.DeltaPercent.HasValue)
         {
-            builder.AppendLine($"- Delta delivery vs timeline: `{insight.Sprint.Health.DeltaPercent.Value}%`");
+            builder.AppendLine($"- Chênh lệch delivery so với timeline: `{insight.Sprint.Health.DeltaPercent.Value}%`");
         }
 
         if (insight.Sprint.EndDateLocal.HasValue)
         {
             var remainingDays = Math.Max(0, (insight.Sprint.EndDateLocal.Value.Date - insight.GeneratedAtLocal.Date).Days);
-            builder.AppendLine($"- Con lai: `{remainingDays}` ngay den `{insight.Sprint.EndDateLocal.Value:yyyy-MM-dd}`");
+            builder.AppendLine($"- Còn lại: `{remainingDays}` ngày đến `{insight.Sprint.EndDateLocal.Value:yyyy-MM-dd}`");
         }
     }
 
@@ -2200,26 +2198,26 @@ public sealed class BotAssistantService(
         var asksLateOnly = AsksAboutLateStandups(lowerQuestion) && !AsksAboutMissingStandups(lowerQuestion);
 
         builder.AppendLine();
-        builder.AppendLine($"Standup due: `{insight.StandupDiscipline.DueTimeLocal:hh\\:mm}` | cua so: `{insight.StandupDiscipline.LookbackDays}` ngay");
-        builder.AppendLine($"- Expected reporters: `{insight.StandupDiscipline.ExpectedReporterCount}`");
-        builder.AppendLine($"- Da nop hom nay: `{submittedToday}`");
-        builder.AppendLine($"- Chua nop hom nay: `{missingToday}`");
-        builder.AppendLine($"- Bao cao co blocker hom nay: `{blockerToday}`");
-        builder.AppendLine($"- Bao cao tre hom nay: `{lateToday}`");
-        builder.AppendLine($"- So nguoi tung tre trong cua so theo doi: `{lateReporterCount}`");
+        builder.AppendLine($"Standup hạn lúc: `{insight.StandupDiscipline.DueTimeLocal:hh\\:mm}` | cửa sổ: `{insight.StandupDiscipline.LookbackDays}` ngày");
+        builder.AppendLine($"- Số người dự kiến báo cáo: `{insight.StandupDiscipline.ExpectedReporterCount}`");
+        builder.AppendLine($"- Đã nộp hôm nay: `{submittedToday}`");
+        builder.AppendLine($"- Chưa nộp hôm nay: `{missingToday}`");
+        builder.AppendLine($"- Báo cáo có blocker hôm nay: `{blockerToday}`");
+        builder.AppendLine($"- Báo cáo trễ hôm nay: `{lateToday}`");
+        builder.AppendLine($"- Số người từng trễ trong cửa sổ theo dõi: `{lateReporterCount}`");
 
         if (asksMissingOnly)
         {
             var asksTopOne = ContainsAny(lowerQuestion, "nhieu nhat", "nhiều nhất", "top 1");
             var missingLines = insight.StandupDiscipline.MissingReporters
                 .Take(asksTopOne ? 1 : 5)
-                .Select(x => $"- Thieu: {FormatMemberLabelV2(insight, x.DiscordUserId)} | missing `{x.MissingDays}` ngay | da nop `{x.SubmittedDays}` ngay | basis `{x.BasisSummary}`")
+                .Select(x => $"- Thiếu: {FormatMemberLabelV2(insight, x.DiscordUserId)} | thiếu `{x.MissingDays}` ngày | đã nộp `{x.SubmittedDays}` ngày | cơ sở `{x.BasisSummary}`")
                 .ToList();
 
-            builder.AppendLine(asksTopOne ? "Nguoi thieu bao cao nhieu nhat:" : "Nguoi hay thieu bao cao:");
+            builder.AppendLine(asksTopOne ? "Người thiếu báo cáo nhiều nhất:" : "Người hay thiếu báo cáo:");
             if (missingLines.Count == 0)
             {
-                builder.AppendLine("- Chua thay ai bi thieu bao cao trong cua so theo doi hien tai.");
+                builder.AppendLine("- Chưa thấy ai bị thiếu báo cáo trong cửa sổ theo dõi hiện tại.");
             }
             else
             {
@@ -2229,7 +2227,7 @@ public sealed class BotAssistantService(
                 }
             }
 
-            builder.AppendLine("Ghi chu: danh sach nay chi tinh ngay thieu bao cao, khong cong ngay nop tre vao missing.");
+            builder.AppendLine("Ghi chú: danh sách này chỉ tính ngày thiếu báo cáo, không cộng ngày nộp trễ vào missing.");
             return;
         }
 
@@ -2238,13 +2236,13 @@ public sealed class BotAssistantService(
             var lateLines = insight.StandupDiscipline.LateReporters
                 .Where(x => x.LateReports > 0)
                 .Take(5)
-                .Select(x => $"- Tre: {FormatMemberLabelV2(insight, x.DiscordUserId)} | tre `{x.LateReports}/{x.TotalReports}` lan | dung gio `{x.OnTimeReports}` lan | rate `{x.LateRatePercent}%`")
+                .Select(x => $"- Trễ: {FormatMemberLabelV2(insight, x.DiscordUserId)} | trễ `{x.LateReports}/{x.TotalReports}` lần | đúng giờ `{x.OnTimeReports}` lần | tỷ lệ `{x.LateRatePercent}%`")
                 .ToList();
 
-            builder.AppendLine("Nguoi hay tre bao cao:");
+            builder.AppendLine("Người hay trễ báo cáo:");
             if (lateLines.Count == 0)
             {
-                builder.AppendLine("- Chua thay ai nop tre trong cua so theo doi hien tai.");
+                builder.AppendLine("- Chưa thấy ai nộp trễ trong cửa sổ theo dõi hiện tại.");
             }
             else
             {
@@ -2262,17 +2260,17 @@ public sealed class BotAssistantService(
             var lateLines = insight.StandupDiscipline.LateReporters
                 .Where(x => x.LateReports > 0)
                 .Take(3)
-                .Select(x => $"- Tre: {FormatMemberLabelV2(insight, x.DiscordUserId)} | `{x.LateReports}/{x.TotalReports}` lan | rate `{x.LateRatePercent}%`")
+                .Select(x => $"- Trễ: {FormatMemberLabelV2(insight, x.DiscordUserId)} | `{x.LateReports}/{x.TotalReports}` lần | tỷ lệ `{x.LateRatePercent}%`")
                 .ToList();
             var missingLines = insight.StandupDiscipline.MissingReporters
                 .Where(x => x.MissingToday)
                 .Take(3)
-                .Select(x => $"- Chua nop hom nay: {FormatMemberLabelV2(insight, x.DiscordUserId)} | missing `{x.MissingDays}` ngay | basis `{x.BasisSummary}`")
+                .Select(x => $"- Chưa nộp hôm nay: {FormatMemberLabelV2(insight, x.DiscordUserId)} | thiếu `{x.MissingDays}` ngày | cơ sở `{x.BasisSummary}`")
                 .ToList();
 
             if (lateLines.Count > 0 || missingLines.Count > 0)
             {
-                builder.AppendLine("Danh sach noi bat:");
+                builder.AppendLine("Danh sách nổi bật:");
                 foreach (var line in lateLines.Concat(missingLines))
                 {
                     builder.AppendLine(line);
@@ -2280,7 +2278,7 @@ public sealed class BotAssistantService(
             }
         }
 
-        builder.AppendLine("Ghi chu: missing reporters la heuristic tu open task assignees, recent standup reporters, va repeated project participants.");
+        builder.AppendLine("Ghi chú: missing reporters là heuristic từ open task assignees, recent standup reporters, và repeated project participants.");
     }
 
     private static void AppendDeterministicTaskFacts(
@@ -2297,17 +2295,17 @@ public sealed class BotAssistantService(
         if (insight.Sprint.HasActiveSprint)
         {
             builder.AppendLine($"Task trong sprint `{insight.Sprint.Name}`:");
-            builder.AppendLine($"- Total `{insight.Sprint.TotalTasks}` | done `{insight.Sprint.DoneTasks}` | todo `{insight.Sprint.TodoTasks}` | in-progress `{insight.Sprint.InProgressTasks}` | backlog-trong-sprint `{insight.Sprint.BacklogTasksInSprint}`");
+            builder.AppendLine($"- Tổng `{insight.Sprint.TotalTasks}` | hoàn thành `{insight.Sprint.DoneTasks}` | chưa làm `{insight.Sprint.TodoTasks}` | đang làm `{insight.Sprint.InProgressTasks}` | backlog trong sprint `{insight.Sprint.BacklogTasksInSprint}`");
         }
 
-        builder.AppendLine($"- Project backlog ngoai sprint: `{insight.Sprint.ProjectBacklogCount}`");
-        builder.AppendLine($"- Bug mo: `{insight.Sprint.OpenBugCount}`");
-        builder.AppendLine($"- Stalled task: `{insight.StalledTasks.Count}`");
-        builder.AppendLine($"- Overdue task: `{overdueCount}`");
-        builder.AppendLine($"- Unassigned task: `{unassignedCount}`");
-        builder.AppendLine($"- High-point chua start: `{highPointNotStartedCount}`");
+        builder.AppendLine($"- Backlog dự án ngoài sprint: `{insight.Sprint.ProjectBacklogCount}`");
+        builder.AppendLine($"- Bug mở: `{insight.Sprint.OpenBugCount}`");
+        builder.AppendLine($"- Task đình trệ: `{insight.StalledTasks.Count}`");
+        builder.AppendLine($"- Task overdue: `{overdueCount}`");
+        builder.AppendLine($"- Task chưa gán: `{unassignedCount}`");
+        builder.AppendLine($"- Task điểm cao chưa bắt đầu: `{highPointNotStartedCount}`");
         builder.AppendLine($"- Open-bug attention item: `{openBugAttentionCount}`");
-        builder.AppendLine($"- Task flow {insight.TaskFlow.LookbackDays} ngay: tao `{insight.TaskFlow.CreatedTasks}` | done `{insight.TaskFlow.CompletedTasks}` | mo bug `{insight.TaskFlow.CreatedBugs}` | dong bug `{insight.TaskFlow.FixedBugs}` | tra backlog `{insight.TaskFlow.ReturnedToBacklog}`");
+        builder.AppendLine($"- Task flow {insight.TaskFlow.LookbackDays} ngày: tạo `{insight.TaskFlow.CreatedTasks}` | hoàn thành `{insight.TaskFlow.CompletedTasks}` | mở bug `{insight.TaskFlow.CreatedBugs}` | đóng bug `{insight.TaskFlow.FixedBugs}` | trả backlog `{insight.TaskFlow.ReturnedToBacklog}`");
 
         var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
         var asksPerSprintBreakdown = WantsPerSprintBreakdown(lowerQuestion);
@@ -2318,16 +2316,16 @@ public sealed class BotAssistantService(
         {
             if (insight.SprintCatalog.Count == 0)
             {
-                builder.AppendLine("- Khong tim thay sprint nao trong project.");
+                builder.AppendLine("- Không tìm thấy sprint nào trong dự án.");
                 return;
             }
 
-            builder.AppendLine("Task theo tung sprint:");
+            builder.AppendLine("Task theo từng sprint:");
             foreach (var sprint in insight.SprintCatalog.Take(4))
             {
                 var sprintTasks = FilterSprintTaskItems(sprint, requestedStatus);
                 builder.AppendLine(
-                    $"- `{sprint.Name}`{(sprint.IsActive ? " (active)" : string.Empty)} | total `{sprint.TotalTasks}` | done `{sprint.DoneTasks}` | todo `{sprint.TodoTasks}` | in-progress `{sprint.InProgressTasks}`");
+                    $"- `{sprint.Name}`{(sprint.IsActive ? " (đang chạy)" : string.Empty)} | tổng `{sprint.TotalTasks}` | hoàn thành `{sprint.DoneTasks}` | chưa làm `{sprint.TodoTasks}` | đang làm `{sprint.InProgressTasks}`");
 
                 var lines = sprintTasks
                     .Take(5)
@@ -2336,7 +2334,7 @@ public sealed class BotAssistantService(
 
                 if (lines.Count == 0)
                 {
-                    builder.AppendLine("  - Khong co task nao khop bo loc trong sprint nay.");
+                    builder.AppendLine("  - Không có task nào khớp bộ lọc trong sprint này.");
                 }
                 else
                 {
@@ -2353,9 +2351,9 @@ public sealed class BotAssistantService(
         if (requestedSprint is not null)
         {
             var sprintTasks = FilterSprintTaskItems(requestedSprint, requestedStatus);
-            builder.AppendLine($"Task trong `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (active)" : string.Empty)}:");
+            builder.AppendLine($"Task trong `{requestedSprint.Name}`{(requestedSprint.IsActive ? " (đang chạy)" : string.Empty)}:");
             builder.AppendLine(
-                $"- Total `{requestedSprint.TotalTasks}` | done `{requestedSprint.DoneTasks}` | todo `{requestedSprint.TodoTasks}` | in-progress `{requestedSprint.InProgressTasks}`");
+                $"- Tổng `{requestedSprint.TotalTasks}` | hoàn thành `{requestedSprint.DoneTasks}` | chưa làm `{requestedSprint.TodoTasks}` | đang làm `{requestedSprint.InProgressTasks}`");
 
             var lines = sprintTasks
                 .Take(10)
@@ -2364,7 +2362,7 @@ public sealed class BotAssistantService(
 
             if (lines.Count == 0)
             {
-                builder.AppendLine("- Khong tim thay task nao khop trong sprint nay.");
+                builder.AppendLine("- Không tìm thấy task nào khớp trong sprint này.");
             }
             else
             {
@@ -2382,17 +2380,17 @@ public sealed class BotAssistantService(
             var completedTasks = insight.CompletedTasks.Take(8).ToList();
             if (completedTasks.Count == 0)
             {
-                builder.AppendLine("- Hien chua thay task nao o trang thai `Done` trong pham vi snapshot nay.");
+                builder.AppendLine("- Hiện chưa thấy task nào ở trạng thái `Done` trong phạm vi snapshot này.");
             }
             else
             {
-                builder.AppendLine("Task da hoan thanh:");
+                builder.AppendLine("Task đã hoàn thành:");
                 foreach (var task in completedTasks)
                 {
                     var owner = task.AssigneeId.HasValue
-                        ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                        ? $" | assignee snapshot {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
                         : string.Empty;
-                    var scope = task.IsInActiveSprint ? " | active sprint" : string.Empty;
+                    var scope = task.IsInActiveSprint ? " | sprint hiện tại" : string.Empty;
                     builder.AppendLine($"- #{task.TaskId} {task.Title} | `{task.Points}d`{owner}{scope}");
                 }
             }
@@ -2407,7 +2405,7 @@ public sealed class BotAssistantService(
 
             if (topOwners.Count > 0)
             {
-                builder.AppendLine("Nguoi dang giu viec nhieu nhat:");
+                builder.AppendLine("Người đang giữ việc nhiều nhất:");
                 foreach (var line in topOwners)
                 {
                     builder.AppendLine(line);
@@ -2433,7 +2431,7 @@ public sealed class BotAssistantService(
             {
                 var workload = FindMemberWorkload(insight, targetMember.DiscordUserId);
                 builder.AppendLine($"Thành viên: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
-                builder.AppendLine($"- Hiện tại: open task `{targetMember.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mở `{targetMember.OpenBugCount}` | open points `{targetMember.OpenPoints}`");
+                builder.AppendLine($"- Hiện tại: task mở `{targetMember.OpenTaskCount}` | đang làm `{workload?.InProgressTaskCount ?? 0}` | bug mở `{targetMember.OpenBugCount}` | point mở `{targetMember.OpenPoints}`");
                 builder.AppendLine($"- Gần đây: hoàn thành `{targetMember.CompletedTasksRecent}` task | fix `{targetMember.FixedBugsRecent}` bug");
                 builder.AppendLine($"- Toàn project: hoàn thành `{targetMember.CompletedTasksAllTime}` task | fix `{targetMember.FixedBugsAllTime}` bug");
                 builder.AppendLine($"- Tập trung: {targetMember.CurrentFocusSummary}");
@@ -2460,10 +2458,10 @@ public sealed class BotAssistantService(
             {
                 var workload = FindMemberWorkload(insight, member.DiscordUserId);
                 builder.AppendLine(
-                    $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open task `{member.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mở `{member.OpenBugCount}` | open points `{member.OpenPoints}` | done all-time `{member.CompletedTasksAllTime}` | fix all-time `{member.FixedBugsAllTime}`");
+                    $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: task mở `{member.OpenTaskCount}` | đang làm `{workload?.InProgressTaskCount ?? 0}` | bug mở `{member.OpenBugCount}` | point mở `{member.OpenPoints}` | hoàn thành all-time `{member.CompletedTasksAllTime}` | fix all-time `{member.FixedBugsAllTime}`");
             }
 
-            builder.AppendLine("Ghi chú: open counts là snapshot hiện tại; all-time done/fix ưu tiên completion events, nếu thiếu thì mới fallback snapshot.");
+            builder.AppendLine("Ghi chú: số open là snapshot hiện tại; all-time done/fix ưu tiên completion events, nếu thiếu thì mới fallback snapshot.");
             return;
         }
 
@@ -2493,8 +2491,8 @@ public sealed class BotAssistantService(
         }
 
         builder.AppendLine();
-        builder.AppendLine($"Member profile tracked: `{insight.Knowledge.Members.Count}`");
-        builder.AppendLine($"Member dang giu viec: `{insight.MemberWorkloads.Count}`");
+        builder.AppendLine($"Member profile đang track: `{insight.Knowledge.Members.Count}`");
+        builder.AppendLine($"Số thành viên đang giữ việc: `{insight.MemberWorkloads.Count}`");
 
         var topMembers = insight.MemberWorkloads
             .Take(5)
@@ -2502,7 +2500,7 @@ public sealed class BotAssistantService(
 
         if (topMembers.Count == 0)
         {
-            builder.AppendLine("- Chua thay member nao dang giu task/bug mo.");
+            builder.AppendLine("- Chưa thấy thành viên nào đang giữ task/bug mở.");
             return;
         }
 
@@ -2831,11 +2829,11 @@ public sealed class BotAssistantService(
     {
         var owner = task.Status.Equals("Done", StringComparison.OrdinalIgnoreCase)
             ? task.AssigneeId.HasValue
-                ? $" | assignee snapshot {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                        ? $" | người đang được gán (snapshot) {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
                 : string.Empty
             : task.AssigneeId.HasValue
-                ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
-                : " | chua assign";
+                ? $" | người phụ trách {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                : " | chưa gán";
 
         return $"- #{task.TaskId} {task.Title} | `{task.Status}` | `{task.Points}d`{owner}";
     }
