@@ -2444,8 +2444,7 @@ public sealed class BotAssistantService(
 
     private static string ClampForDiscord(string value)
     {
-        const int maxLength = 1900;
-        return value.Length <= maxLength ? value : $"{value[..maxLength]}...";
+        return value;
     }
 
     private static string Truncate(string value, int maxLength)

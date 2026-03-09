@@ -33,6 +33,7 @@ public sealed class DiscordBotService(
         ["\U0001F3A8"] = "Artist"
     };
     private bool _commandsRegistered;
+    private const int DiscordMessageChunkLimit = 1800;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -187,9 +188,7 @@ public sealed class DiscordBotService(
             reply = "Tôi chưa xử lý được câu hỏi này lúc này. Hãy thử lại sau ít phút.";
         }
 
-        await message.Channel.SendMessageAsync(
-            text: reply,
-            messageReference: new MessageReference(message.Id));
+        await SendAssistantReplyAsync(message, reply);
     }
 
     private async Task HandleAssistantMentionSafelyAsync(SocketUserMessage message)
@@ -202,6 +201,77 @@ public sealed class DiscordBotService(
         {
             _logger.LogError(ex, "Không thể xử lý assistant mention nền cho message {MessageId}", message.Id);
         }
+    }
+
+    private async Task SendAssistantReplyAsync(SocketUserMessage sourceMessage, string reply)
+    {
+        var chunks = SplitDiscordMessage(reply);
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var prefix = chunks.Count > 1 ? $"({index + 1}/{chunks.Count})\n" : string.Empty;
+            await sourceMessage.Channel.SendMessageAsync(
+                text: prefix + chunks[index],
+                messageReference: index == 0 ? new MessageReference(sourceMessage.Id) : null);
+        }
+    }
+
+    private static List<string> SplitDiscordMessage(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return ["Tôi chưa có nội dung để trả lời."];
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Trim();
+        var chunks = new List<string>();
+        var start = 0;
+
+        while (start < normalized.Length)
+        {
+            var remaining = normalized.Length - start;
+            if (remaining <= DiscordMessageChunkLimit)
+            {
+                chunks.Add(normalized[start..].Trim());
+                break;
+            }
+
+            var maxEnd = start + DiscordMessageChunkLimit;
+            var splitIndex = FindSplitIndex(normalized, start, maxEnd);
+            chunks.Add(normalized[start..splitIndex].Trim());
+
+            start = splitIndex;
+            while (start < normalized.Length && char.IsWhiteSpace(normalized[start]))
+            {
+                start++;
+            }
+        }
+
+        return chunks.Count == 0 ? [normalized] : chunks;
+    }
+
+    private static int FindSplitIndex(string text, int start, int maxEnd)
+    {
+        var searchLength = maxEnd - start;
+
+        var doubleBreak = text.LastIndexOf("\n\n", maxEnd - 1, searchLength, StringComparison.Ordinal);
+        if (doubleBreak > start + 200)
+        {
+            return doubleBreak;
+        }
+
+        var singleBreak = text.LastIndexOf('\n', maxEnd - 1, searchLength);
+        if (singleBreak > start + 120)
+        {
+            return singleBreak;
+        }
+
+        var space = text.LastIndexOf(' ', maxEnd - 1, searchLength);
+        if (space > start + 80)
+        {
+            return space;
+        }
+
+        return maxEnd;
     }
 
     private Task OnReactionAddedAsync(
