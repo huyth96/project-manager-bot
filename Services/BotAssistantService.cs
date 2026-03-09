@@ -2001,7 +2001,14 @@ public sealed class BotAssistantService(
                 break;
 
             case AssistantIntent.ProgressReview:
-                AppendDeterministicProgressFacts(builder, insight, lowerQuestion);
+                if (LooksLikeSprintOverviewQuery(insight, lowerQuestion))
+                {
+                    AppendDeterministicTaskFacts(builder, insight, lowerQuestion);
+                }
+                else
+                {
+                    AppendDeterministicProgressFacts(builder, insight, lowerQuestion);
+                }
                 break;
 
             default:
@@ -2014,6 +2021,10 @@ public sealed class BotAssistantService(
                     || LooksLikeMemberContributionQuery(lowerQuestion))
                 {
                     AppendDeterministicMemberFacts(builder, insight, lowerQuestion);
+                }
+                else if (LooksLikeSprintOverviewQuery(insight, lowerQuestion))
+                {
+                    AppendDeterministicTaskFacts(builder, insight, lowerQuestion);
                 }
                 else if (ContainsAny(lowerQuestion, "task", "bug", "backlog", "dinh tre", "stalled"))
                 {
@@ -2047,6 +2058,7 @@ public sealed class BotAssistantService(
     {
         var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
         var asksSprintTaskList = LooksLikeSprintTaskQuery(lowerQuestion);
+        var asksSprintOverview = LooksLikeSprintOverviewQuery(insight, lowerQuestion);
         var asksStandupReliability = LooksLikeStandupReliabilityQuery(lowerQuestion);
         var asksMemberCounts = LooksLikeMemberCountQuery(lowerQuestion)
             || LooksLikeMemberScopedWorkQuery(insight, lowerQuestion);
@@ -2072,6 +2084,7 @@ public sealed class BotAssistantService(
             "dong bao nhieu")
             || asksCompletedTaskList
             || asksSprintTaskList
+            || asksSprintOverview
             || asksStandupReliability
             || asksMemberCounts
             || asksMemberContribution;
@@ -2513,6 +2526,25 @@ public sealed class BotAssistantService(
             || (mentionsSprint && (mentionsTask || mentionsStatus));
     }
 
+    private static bool LooksLikeSprintOverviewQuery(ProjectAssistantContext insight, string lowerQuestion)
+    {
+        return TryResolveRequestedSprint(insight, lowerQuestion) is not null
+            && ContainsAny(
+                lowerQuestion,
+                "co nhung gi",
+                "có những gì",
+                "gom gi",
+                "gồm gì",
+                "gom nhung gi",
+                "gồm những gì",
+                "co gi",
+                "có gì",
+                "tong quan",
+                "tổng quan",
+                "chi tiet",
+                "chi tiết");
+    }
+
     private static bool WantsPerSprintBreakdown(string lowerQuestion)
     {
         return ContainsAny(
@@ -2792,9 +2824,13 @@ public sealed class BotAssistantService(
 
     private static string FormatSprintTaskLine(ProjectAssistantContext insight, AssistantSprintTaskItem task)
     {
-        var owner = task.AssigneeId.HasValue
-            ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
-            : " | chua assign";
+        var owner = task.Status.Equals("Done", StringComparison.OrdinalIgnoreCase)
+            ? task.AssigneeId.HasValue
+                ? $" | assignee snapshot {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                : string.Empty
+            : task.AssigneeId.HasValue
+                ? $" | owner {FormatMemberLabelV2(insight, task.AssigneeId.Value)}"
+                : " | chua assign";
 
         return $"- #{task.TaskId} {task.Title} | `{task.Status}` | `{task.Points}d`{owner}";
     }
