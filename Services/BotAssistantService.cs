@@ -1325,7 +1325,22 @@ public sealed class BotAssistantService(
             return AssistantIntent.StandupDiscipline;
         }
 
-        if (ContainsAny(lower, "member", "thanh vien", "workload", "qua tai", "dang giu", "ai dang lam nhieu", "ai lam nhieu", "phu hop", "ai hop task"))
+        if (ContainsAny(
+            lower,
+            "member",
+            "thanh vien",
+            "workload",
+            "qua tai",
+            "dang giu",
+            "ai dang lam nhieu",
+            "ai lam nhieu",
+            "phu hop",
+            "ai hop task",
+            "da hoan thanh gi",
+            "hoan thanh nhung gi",
+            "dong gop gi",
+            "lam duoc gi",
+            "profile"))
         {
             return AssistantIntent.MemberInsights;
         }
@@ -1981,7 +1996,7 @@ public sealed class BotAssistantService(
                 break;
 
             case AssistantIntent.MemberInsights:
-                AppendDeterministicMemberFacts(builder, insight);
+                AppendDeterministicMemberFacts(builder, insight, lowerQuestion);
                 break;
 
             case AssistantIntent.ProgressReview:
@@ -1999,7 +2014,11 @@ public sealed class BotAssistantService(
                 }
                 else if (ContainsAny(lowerQuestion, "member", "thanh vien", "workload", "qua tai"))
                 {
-                    AppendDeterministicMemberFacts(builder, insight);
+                    AppendDeterministicMemberFacts(builder, insight, lowerQuestion);
+                }
+                else if (LooksLikeMemberContributionQuery(lowerQuestion))
+                {
+                    AppendDeterministicMemberFacts(builder, insight, lowerQuestion);
                 }
                 else
                 {
@@ -2019,6 +2038,7 @@ public sealed class BotAssistantService(
         var asksCompletedTaskList = WantsCompletedTasksOnly(lowerQuestion);
         var asksSprintTaskList = LooksLikeSprintTaskQuery(lowerQuestion);
         var asksStandupReliability = LooksLikeStandupReliabilityQuery(lowerQuestion);
+        var asksMemberContribution = LooksLikeMemberContributionQuery(lowerQuestion);
 
         var hasFactCue = ContainsAny(
             lowerQuestion,
@@ -2040,7 +2060,8 @@ public sealed class BotAssistantService(
             "dong bao nhieu")
             || asksCompletedTaskList
             || asksSprintTaskList
-            || asksStandupReliability;
+            || asksStandupReliability
+            || asksMemberContribution;
 
         if (!hasFactCue)
         {
@@ -2366,8 +2387,37 @@ public sealed class BotAssistantService(
         }
     }
 
-    private static void AppendDeterministicMemberFacts(StringBuilder builder, ProjectAssistantContext insight)
+    private static void AppendDeterministicMemberFacts(
+        StringBuilder builder,
+        ProjectAssistantContext insight,
+        string lowerQuestion)
     {
+        var targetMember = TryResolveTargetMember(insight, lowerQuestion);
+        if (LooksLikeMemberContributionQuery(lowerQuestion) && targetMember is not null)
+        {
+            builder.AppendLine();
+            builder.AppendLine($"Member: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
+            builder.AppendLine($"- Standup: {targetMember.StandupSummary}");
+            builder.AppendLine($"- Recent output: {targetMember.RecentOutputSummary}");
+            builder.AppendLine($"- Historical output: {targetMember.HistoricalOutputSummary}");
+            builder.AppendLine($"- Risk: {targetMember.RiskSummary}");
+
+            var completedLines = BuildCompletedTaskLinesForMember(insight, targetMember.DiscordUserId)
+                .Take(12)
+                .ToList();
+
+            if (completedLines.Count > 0)
+            {
+                builder.AppendLine("Task da hoan thanh gan voi member nay trong snapshot:");
+                foreach (var line in completedLines)
+                {
+                    builder.AppendLine(line);
+                }
+            }
+
+            return;
+        }
+
         builder.AppendLine();
         builder.AppendLine($"Member profile tracked: `{insight.Knowledge.Members.Count}`");
         builder.AppendLine($"Member dang giu viec: `{insight.MemberWorkloads.Count}`");
@@ -2435,6 +2485,25 @@ public sealed class BotAssistantService(
                 || ContainsAny(lowerQuestion, "thuong xuyen", "thường xuyên", "hay"));
     }
 
+    private static bool LooksLikeMemberContributionQuery(string lowerQuestion)
+    {
+        return ContainsAny(
+            lowerQuestion,
+            "da hoan thanh gi",
+            "đã hoàn thành gì",
+            "hoan thanh nhung gi",
+            "hoàn thành những gì",
+            "dong gop gi",
+            "đóng góp gì",
+            "lam duoc gi",
+            "làm được gì",
+            "complete task nao",
+            "completed gi",
+            "profile")
+            || (ContainsAny(lowerQuestion, "hoan thanh", "hoàn thành", "dong gop", "đóng góp")
+                && ContainsAny(lowerQuestion, "ai", "nguoi nay", "người này", "<@"));
+    }
+
     private static bool AsksAboutMissingStandups(string lowerQuestion)
     {
         return ContainsAny(
@@ -2464,6 +2533,55 @@ public sealed class BotAssistantService(
             "muộn",
             "dung gio",
             "đúng giờ");
+    }
+
+    private static AssistantMemberProfile? TryResolveTargetMember(ProjectAssistantContext insight, string lowerQuestion)
+    {
+        var mentionMatch = Regex.Match(lowerQuestion, @"<@!?(\d+)>");
+        if (mentionMatch.Success && ulong.TryParse(mentionMatch.Groups[1].Value, out var mentionedUserId))
+        {
+            return insight.Knowledge.Members.FirstOrDefault(x => x.DiscordUserId == mentionedUserId);
+        }
+
+        return insight.Knowledge.Members
+            .Where(x => !string.IsNullOrWhiteSpace(x.DisplayName))
+            .OrderByDescending(x => x.DisplayName.Length)
+            .FirstOrDefault(x => lowerQuestion.Contains(x.DisplayName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> BuildCompletedTaskLinesForMember(ProjectAssistantContext insight, ulong userId)
+    {
+        var sprintNameByTaskId = insight.SprintCatalog
+            .SelectMany(sprint => sprint.TaskItems.Select(task => new { task.TaskId, SprintName = sprint.Name }))
+            .GroupBy(x => x.TaskId)
+            .ToDictionary(x => x.Key, x => x.First().SprintName);
+
+        var completedTaskLines = insight.CompletedTasks
+            .Where(x => x.AssigneeId == userId)
+            .OrderByDescending(x => x.TaskId)
+            .Select(x =>
+            {
+                var sprintLabel = sprintNameByTaskId.TryGetValue(x.TaskId, out var sprintName) ? sprintName : (x.IsInActiveSprint ? "active sprint" : "project");
+                return $"- #{x.TaskId} {x.Title} | `{x.Points}d` | {sprintLabel}";
+            });
+
+        var sprintTaskLines = insight.SprintCatalog
+            .SelectMany(sprint => sprint.TaskItems
+                .Where(task =>
+                    task.AssigneeId == userId &&
+                    task.Status.Equals("Done", StringComparison.OrdinalIgnoreCase))
+                .Select(task => new
+                {
+                    task.TaskId,
+                    Line = $"- #{task.TaskId} {task.Title} | `{task.Points}d` | {sprint.Name}"
+                }))
+            .OrderByDescending(x => x.TaskId)
+            .ToList();
+
+        return completedTaskLines
+            .Concat(sprintTaskLines.Select(x => x.Line))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     private static string? TryResolveRequestedTaskStatus(string lowerQuestion)
