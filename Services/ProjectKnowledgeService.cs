@@ -532,7 +532,7 @@ public sealed class ProjectKnowledgeService(
                 RecentOutputSummary = recentOutputSummary,
                 HistoricalOutputSummary = historicalOutputSummary,
                 RiskSummary = riskSummary,
-                EvidenceSummary = $"{KnowledgeLookbackDays}d window: {memberMessages.Count} messages, {submittedSignals.Count} standups, {memberEvents.Count} task events | all-time done {completedTasksAllTime} task, fixed {fixedBugsAllTime} bug",
+                EvidenceSummary = $"Cửa sổ {KnowledgeLookbackDays} ngày: {memberMessages.Count} messages, {submittedSignals.Count} standup, {memberEvents.Count} task events | toàn thời gian hoàn thành {completedTasksAllTime} task, fix {fixedBugsAllTime} bug",
                 LastSignalDate = signals.OrderByDescending(x => x.LocalDate).FirstOrDefault()?.LocalDate,
                 LastSeenAtUtc = memberMessages.OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault()?.CreatedAtUtc.UtcDateTime,
                 UpdatedAtUtc = DateTime.UtcNow
@@ -1029,12 +1029,12 @@ public sealed class ProjectKnowledgeService(
         {
             var action = latestEvent.EventType switch
             {
-                TaskEventType.Completed => "Vua hoan thanh",
-                TaskEventType.BugFixed => "Vua dong bug",
-                TaskEventType.Started => "Dang trien khai",
-                TaskEventType.Claimed or TaskEventType.Assigned => "Moi nhan",
-                TaskEventType.BugClaimed => "Dang xu ly bug",
-                _ => "Gan day dang xu ly"
+                TaskEventType.Completed => "Vừa hoàn thành",
+                TaskEventType.BugFixed => "Vừa đóng bug",
+                TaskEventType.Started => "Đang triển khai",
+                TaskEventType.Claimed or TaskEventType.Assigned => "Mới nhận",
+                TaskEventType.BugClaimed => "Đang xử lý bug",
+                _ => "Gần đây đang xử lý"
             };
 
             return TrimTo($"{action} {latestEvent.TaskType.ToString().ToLowerInvariant()} {latestEvent.TitleSnapshot}", 220);
@@ -1051,30 +1051,30 @@ public sealed class ProjectKnowledgeService(
 
         if (dominantTopics.Count > 0)
         {
-            return $"Dang tap trung vao {string.Join(", ", dominantTopics.Take(2))}.";
+            return $"Đang tập trung vào {string.Join(", ", dominantTopics.Take(2))}.";
         }
 
         if (workload is not null && (workload.OpenTaskCount > 0 || workload.OpenBugCount > 0))
         {
-            return $"Dang giu {workload.OpenTaskCount} task mo va {workload.OpenBugCount} bug.";
+            return $"Đang giữ {workload.OpenTaskCount} task mở và {workload.OpenBugCount} bug.";
         }
 
-        return "Chua ro focus hien tai.";
+        return "Chưa rõ focus hiện tại.";
     }
 
     private static string BuildRecentOutputSummary(int completedTasksRecent, int fixedBugsRecent, IReadOnlyList<TaskEvent> memberEvents)
     {
         if (completedTasksRecent > 0 || fixedBugsRecent > 0)
         {
-            return $"Trong {KnowledgeLookbackDays}d: done {completedTasksRecent} task, fix {fixedBugsRecent} bug.";
+            return $"Trong {KnowledgeLookbackDays} ngày gần đây: hoàn thành {completedTasksRecent} task, fix {fixedBugsRecent} bug.";
         }
 
         if (memberEvents.Count > 0)
         {
-            return $"Trong {KnowledgeLookbackDays}d co {memberEvents.Count} task event, chua thay output hoan thanh ro.";
+            return $"Trong {KnowledgeLookbackDays} ngày gần đây có {memberEvents.Count} task event, chưa thấy output hoàn thành rõ ràng.";
         }
 
-        return $"Chua thay output ro trong {KnowledgeLookbackDays}d.";
+        return $"Chưa thấy output rõ ràng trong {KnowledgeLookbackDays} ngày gần đây.";
     }
 
     private static string BuildHistoricalOutputSummary(
@@ -1085,7 +1085,7 @@ public sealed class ProjectKnowledgeService(
     {
         if (completedTasksAllTime == 0 && fixedBugsAllTime == 0)
         {
-            return "Chua thay lich su task/bug done gan cho member nay trong du lieu project hien co.";
+            return "Chưa thấy lịch sử task/bug hoàn thành gắn với thành viên này trong dữ liệu project hiện có.";
         }
 
         var notable = completedWorkItems
@@ -1096,17 +1096,17 @@ public sealed class ProjectKnowledgeService(
             {
                 var sprintLabel = x.SprintId.HasValue && sprintNameLookup.TryGetValue(x.SprintId.Value, out var sprintName)
                     ? sprintName
-                    : "ngoai sprint";
+                    : "ngoài sprint";
                 var workLabel = x.TaskType == TaskItemType.Bug ? "bug" : "task";
                 return $"{sprintLabel}: {workLabel} #{x.TaskItemId} {TrimTo(x.Title, 50)}";
             })
             .ToList();
 
         var sourceSuffix = completedWorkItems.Any(x => !x.FromCompletionEvent)
-            ? " Attribution uu tien completion actor; mot phan item cu fallback theo assignee snapshot."
-            : " Attribution tu completion actor.";
-        var notableText = notable.Count == 0 ? string.Empty : $" Noi bat: {string.Join("; ", notable)}.";
-        return $"Toan project: done {completedTasksAllTime} task, fix {fixedBugsAllTime} bug.{notableText}{sourceSuffix}";
+            ? " Attribution ưu tiên completion actor; một phần item cũ fallback theo assignee snapshot."
+            : " Attribution từ completion actor.";
+        var notableText = notable.Count == 0 ? string.Empty : $" Nổi bật: {string.Join("; ", notable)}.";
+        return $"Toàn project: hoàn thành {completedTasksAllTime} task, fix {fixedBugsAllTime} bug.{notableText}{sourceSuffix}";
     }
 
     private static string BuildStandupSummary(
@@ -1120,11 +1120,18 @@ public sealed class ProjectKnowledgeService(
     {
         if (expectedDays <= 0)
         {
-            return $"Chua du standup signal trong {KnowledgeLookbackDays}d.";
+            return $"Chưa đủ tín hiệu standup trong {KnowledgeLookbackDays} ngày gần đây.";
         }
 
-        var averageLateText = averageLateMinutes.HasValue ? $", tre TB {averageLateMinutes.Value}m" : string.Empty;
-        return $"Standup {submittedDays}/{expectedDays}, missing {missingDays}, late {lateDays} ({lateRatePercent}%){averageLateText}, blocker {blockerDays} ngay trong {KnowledgeLookbackDays}d.";
+        var onTimeDays = Math.Max(0, submittedDays - lateDays);
+        var lateSummary = submittedDays == 0
+            ? "chưa có báo cáo nào để đánh giá đúng giờ/trễ"
+            : $"trễ {lateDays}/{submittedDays} lần đã nộp ({lateRatePercent}%)";
+        var averageLateText = averageLateMinutes.HasValue && lateDays > 0
+            ? $", trễ trung bình {averageLateMinutes.Value} phút"
+            : string.Empty;
+
+        return $"Trong {KnowledgeLookbackDays} ngày gần đây: dự kiến {expectedDays} lần, đã nộp {submittedDays}, đúng giờ {onTimeDays}, {lateSummary}, thiếu {missingDays}, có blocker {blockerDays} ngày{averageLateText}.";
     }
 
     private static string BuildMemberRiskSummary(
@@ -1137,17 +1144,17 @@ public sealed class ProjectKnowledgeService(
 
         if (missingStandupDays > 0)
         {
-            parts.Add($"thieu standup {missingStandupDays} ngay");
+            parts.Add($"thiếu standup {missingStandupDays} ngày");
         }
 
         if (lateStandupRatePercent >= 50)
         {
-            parts.Add($"tre standup {lateStandupRatePercent}%");
+            parts.Add($"tỷ lệ báo cáo trễ cao ({lateStandupRatePercent}% trên các lần đã nộp)");
         }
 
         if (blockerDays > 0)
         {
-            parts.Add($"co blocker {blockerDays} ngay");
+            parts.Add($"có blocker {blockerDays} ngày");
         }
 
         if (workload is not null)
@@ -1159,12 +1166,12 @@ public sealed class ProjectKnowledgeService(
 
             if (workload.OpenBugCount >= 2)
             {
-                parts.Add($"{workload.OpenBugCount} bug dang mo");
+                parts.Add($"{workload.OpenBugCount} bug đang mở");
             }
         }
 
         return parts.Count == 0
-            ? "Chua thay risk member noi bat."
+            ? "Chưa thấy rủi ro nổi bật ở thành viên này."
             : string.Join("; ", parts) + ".";
     }
 

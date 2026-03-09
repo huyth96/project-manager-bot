@@ -186,7 +186,14 @@ public sealed class ProjectInsightService(
         var memberWorkloads = BuildMemberWorkloads(openProjectTasks, openBugs, recentTaskEvents);
         var stalledTasks = BuildStalledTasks(activeSprint, sprintTasks, openProjectTasks, latestTaskEventsByTaskId);
         var sprintSnapshot = BuildSprintSnapshot(activeSprint, sprintTasks, backlogCount, openBugs.Count);
-        var recentStandups = await LoadRecentStandupsAsync(db, project.Id, cancellationToken);
+        var knowledgeStandups = await LoadStandupsAsync(
+            db,
+            project.Id,
+            StandupDisciplineLookbackDays,
+            cancellationToken);
+        var recentStandups = knowledgeStandups
+            .Where(x => x.Date >= _studioTime.LocalDate.AddDays(-(Math.Clamp(_options.MaxStandupDays, 1, 7) - 1)))
+            .ToList();
         var standupDiscipline = await BuildStandupDisciplineAsync(db, project.Id, cancellationToken);
         var attentionItems = BuildAttentionItems(
             activeSprint,
@@ -206,7 +213,7 @@ public sealed class ProjectInsightService(
         var knowledge = await _projectKnowledgeService.BuildKnowledgeAsync(
             project.Id,
             sprintSnapshot,
-            recentStandups,
+            knowledgeStandups,
             standupDiscipline,
             memberWorkloads,
             stalledTasks,
@@ -330,12 +337,12 @@ public sealed class ProjectInsightService(
             .ToListAsync(cancellationToken);
     }
 
-    private async Task<List<AssistantStandupEntry>> LoadRecentStandupsAsync(
+    private async Task<List<AssistantStandupEntry>> LoadStandupsAsync(
         BotDbContext db,
         int projectId,
+        int lookbackDays,
         CancellationToken cancellationToken)
     {
-        var lookbackDays = Math.Clamp(_options.MaxStandupDays, 1, 7);
         var fromDate = _studioTime.LocalDate.AddDays(-(lookbackDays - 1));
 
         var reports = await db.StandupReports

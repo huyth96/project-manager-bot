@@ -1983,8 +1983,8 @@ public sealed class BotAssistantService(
         }
 
         var builder = new StringBuilder();
-        builder.AppendLine($"Du an: `{insight.Scope.ProjectName}`");
-        builder.AppendLine($"Snapshot luc: `{insight.GeneratedAtLocal:yyyy-MM-dd HH:mm}`");
+        builder.AppendLine($"Dự án: `{insight.Scope.ProjectName}`");
+        builder.AppendLine($"Snapshot lúc: `{insight.GeneratedAtLocal:yyyy-MM-dd HH:mm}`");
 
         switch (intent)
         {
@@ -2036,7 +2036,7 @@ public sealed class BotAssistantService(
         }
 
         builder.AppendLine();
-        builder.Append("Luu y: day la cau tra loi tat dinh tu snapshot DB/memory hien co, khong qua dien giai AI.");
+        builder.Append("Lưu ý: đây là câu trả lời tất định từ snapshot DB/memory hiện có, không qua diễn giải AI.");
         return builder.ToString().Trim();
     }
 
@@ -2416,13 +2416,13 @@ public sealed class BotAssistantService(
             if (targetMember is not null)
             {
                 var workload = FindMemberWorkload(insight, targetMember.DiscordUserId);
-                builder.AppendLine($"Member: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
-                builder.AppendLine($"- Hien tai: open task `{targetMember.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mo `{targetMember.OpenBugCount}` | open points `{targetMember.OpenPoints}`");
-                builder.AppendLine($"- Gan day: done `{targetMember.CompletedTasksRecent}` task | fix `{targetMember.FixedBugsRecent}` bug");
-                builder.AppendLine($"- Toan project: done `{targetMember.CompletedTasksAllTime}` task | fix `{targetMember.FixedBugsAllTime}` bug");
-                builder.AppendLine($"- Focus: {targetMember.CurrentFocusSummary}");
+                builder.AppendLine($"Thành viên: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
+                builder.AppendLine($"- Hiện tại: open task `{targetMember.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mở `{targetMember.OpenBugCount}` | open points `{targetMember.OpenPoints}`");
+                builder.AppendLine($"- Gần đây: hoàn thành `{targetMember.CompletedTasksRecent}` task | fix `{targetMember.FixedBugsRecent}` bug");
+                builder.AppendLine($"- Toàn project: hoàn thành `{targetMember.CompletedTasksAllTime}` task | fix `{targetMember.FixedBugsAllTime}` bug");
+                builder.AppendLine($"- Tập trung: {targetMember.CurrentFocusSummary}");
                 builder.AppendLine($"- Standup: {targetMember.StandupSummary}");
-                builder.AppendLine($"- Evidence: {targetMember.EvidenceSummary}");
+                builder.AppendLine($"- Dấu vết: {targetMember.EvidenceSummary}");
                 return;
             }
 
@@ -2435,30 +2435,30 @@ public sealed class BotAssistantService(
 
             if (memberRows.Count == 0)
             {
-                builder.AppendLine("- Chua co member profile de thong ke so luong task/bug theo nguoi.");
+                builder.AppendLine("- Chưa có member profile để thống kê số lượng task/bug theo người.");
                 return;
             }
 
-            builder.AppendLine("Thong ke task/bug theo member:");
+            builder.AppendLine("Thống kê task/bug theo thành viên:");
             foreach (var member in memberRows)
             {
                 var workload = FindMemberWorkload(insight, member.DiscordUserId);
                 builder.AppendLine(
-                    $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open task `{member.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mo `{member.OpenBugCount}` | open points `{member.OpenPoints}` | done all-time `{member.CompletedTasksAllTime}` | fix all-time `{member.FixedBugsAllTime}`");
+                    $"- {FormatMemberLabelV2(insight, member.DiscordUserId)}: open task `{member.OpenTaskCount}` | in-progress `{workload?.InProgressTaskCount ?? 0}` | bug mở `{member.OpenBugCount}` | open points `{member.OpenPoints}` | done all-time `{member.CompletedTasksAllTime}` | fix all-time `{member.FixedBugsAllTime}`");
             }
 
-            builder.AppendLine("Ghi chu: open counts la snapshot hien tai; all-time done/fix uu tien completion events, neu thieu thi moi fallback snapshot.");
+            builder.AppendLine("Ghi chú: open counts là snapshot hiện tại; all-time done/fix ưu tiên completion events, nếu thiếu thì mới fallback snapshot.");
             return;
         }
 
         if (LooksLikeMemberContributionQuery(lowerQuestion) && targetMember is not null)
         {
             builder.AppendLine();
-            builder.AppendLine($"Member: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
+            builder.AppendLine($"Thành viên: {FormatMemberLabelV2(insight, targetMember.DiscordUserId)}");
             builder.AppendLine($"- Standup: {targetMember.StandupSummary}");
-            builder.AppendLine($"- Recent output: {targetMember.RecentOutputSummary}");
-            builder.AppendLine($"- Historical output: {targetMember.HistoricalOutputSummary}");
-            builder.AppendLine($"- Risk: {targetMember.RiskSummary}");
+            builder.AppendLine($"- Đầu ra gần đây: {targetMember.RecentOutputSummary}");
+            builder.AppendLine($"- Lịch sử đóng góp: {targetMember.HistoricalOutputSummary}");
+            builder.AppendLine($"- Rủi ro: {targetMember.RiskSummary}");
 
             var completedLines = BuildCompletedTaskLinesForMember(insight, targetMember.DiscordUserId)
                 .Take(12)
@@ -2466,7 +2466,7 @@ public sealed class BotAssistantService(
 
             if (completedLines.Count > 0)
             {
-                builder.AppendLine("Task da hoan thanh gan voi member nay trong snapshot:");
+                builder.AppendLine("Task đã hoàn thành gắn với thành viên này trong snapshot:");
                 foreach (var line in completedLines)
                 {
                     builder.AppendLine(line);
