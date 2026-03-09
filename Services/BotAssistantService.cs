@@ -1321,7 +1321,9 @@ public sealed class BotAssistantService(
             return AssistantIntent.Estimation;
         }
 
-        if (ContainsAny(lower, "bao cao", "standup", "tre bao cao", "khong nop", "chua nop", "missing report", "miss standup"))
+        if (ContainsAny(lower, "bao cao", "báo cáo", "standup", "missing report", "miss standup")
+            || AsksAboutMissingStandups(lower)
+            || AsksAboutLateStandups(lower))
         {
             return AssistantIntent.StandupDiscipline;
         }
@@ -2208,12 +2210,13 @@ public sealed class BotAssistantService(
 
         if (asksMissingOnly)
         {
+            var asksTopOne = ContainsAny(lowerQuestion, "nhieu nhat", "nhiều nhất", "top 1");
             var missingLines = insight.StandupDiscipline.MissingReporters
-                .Take(5)
+                .Take(asksTopOne ? 1 : 5)
                 .Select(x => $"- Thieu: {FormatMemberLabelV2(insight, x.DiscordUserId)} | missing `{x.MissingDays}` ngay | da nop `{x.SubmittedDays}` ngay | basis `{x.BasisSummary}`")
                 .ToList();
 
-            builder.AppendLine("Nguoi hay thieu bao cao:");
+            builder.AppendLine(asksTopOne ? "Nguoi thieu bao cao nhieu nhat:" : "Nguoi hay thieu bao cao:");
             if (missingLines.Count == 0)
             {
                 builder.AppendLine("- Chua thay ai bi thieu bao cao trong cua so theo doi hien tai.");
@@ -2672,6 +2675,8 @@ public sealed class BotAssistantService(
         return ContainsAny(
             lowerQuestion,
             "bo bao cao",
+            "bo qua bao cao",
+            "bỏ qua báo cáo",
             "bỏ báo cáo",
             "khong nop",
             "không nộp",
