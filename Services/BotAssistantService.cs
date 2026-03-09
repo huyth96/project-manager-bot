@@ -949,6 +949,11 @@ public sealed class BotAssistantService(
         }
     }
 
+    private static string FormatMemberMentionV2(ulong userId)
+    {
+        return userId == 0 ? "unknown-user" : $"<@{userId}>";
+    }
+
     private static string ResolveMemberDisplayNameV2(ProjectAssistantContext insight, ulong userId)
     {
         var profileName = insight.Knowledge.Members
@@ -974,17 +979,13 @@ public sealed class BotAssistantService(
             ?.AuthorName;
 
         return string.IsNullOrWhiteSpace(memoryName)
-            ? $"<@{userId}>"
+            ? FormatMemberMentionV2(userId)
             : memoryName;
     }
 
     private static string FormatMemberLabelV2(ProjectAssistantContext insight, ulong userId)
     {
-        var displayName = ResolveMemberDisplayNameV2(insight, userId);
-        var mention = $"<@{userId}>";
-        return string.Equals(displayName, mention, StringComparison.Ordinal)
-            ? mention
-            : $"{displayName} ({mention})";
+        return FormatMemberMentionV2(userId);
     }
 
     private static string FormatMemberConfidenceV2(ProjectAssistantContext insight, ulong userId)
@@ -1015,6 +1016,7 @@ public sealed class BotAssistantService(
                 {
                     x.Date,
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                     x.ReportedAtLocal,
                     x.Yesterday,
@@ -1028,6 +1030,7 @@ public sealed class BotAssistantService(
                 .Select(x => new
                 {
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                     x.TotalReports,
                     x.LateReports,
@@ -1043,6 +1046,7 @@ public sealed class BotAssistantService(
                 .Select(x => new
                 {
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                     x.MissingDays,
                     x.SubmittedDays,
@@ -1069,6 +1073,7 @@ public sealed class BotAssistantService(
                 .Select(x => new
                 {
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     x.DisplayName,
                     x.RoleSummary,
                     x.SkillKeywords,
@@ -1100,6 +1105,7 @@ public sealed class BotAssistantService(
                 {
                     x.Date,
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                     x.ExpectedStandup,
                     x.SubmittedStandup,
@@ -1125,6 +1131,7 @@ public sealed class BotAssistantService(
                 .Select(x => new
                 {
                     x.DiscordUserId,
+                    Mention = FormatMemberMentionV2(x.DiscordUserId),
                     DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                     x.OpenTaskCount,
                     x.InProgressTaskCount,
@@ -1158,6 +1165,7 @@ public sealed class BotAssistantService(
                     .Select(x => new
                     {
                         x.DiscordUserId,
+                        Mention = FormatMemberMentionV2(x.DiscordUserId),
                         DisplayName = ResolveMemberDisplayNameV2(insight, x.DiscordUserId),
                         x.EventCount,
                         x.CompletedTasks,
@@ -1174,6 +1182,7 @@ public sealed class BotAssistantService(
                     x.Title,
                     x.Points,
                     x.AssigneeId,
+                    AssigneeMention = x.AssigneeId.HasValue ? FormatMemberMentionV2(x.AssigneeId.Value) : null,
                     AssigneeName = x.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, x.AssigneeId.Value) : null,
                     x.IsInActiveSprint
                 })
@@ -1201,6 +1210,7 @@ public sealed class BotAssistantService(
                             task.Status,
                             task.Points,
                             task.AssigneeId,
+                            AssigneeMention = task.AssigneeId.HasValue ? FormatMemberMentionV2(task.AssigneeId.Value) : null,
                             AssigneeName = task.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, task.AssigneeId.Value) : null
                         })
                         .ToList()
@@ -1215,6 +1225,7 @@ public sealed class BotAssistantService(
                     x.Status,
                     x.Points,
                     x.AssigneeId,
+                    AssigneeMention = x.AssigneeId.HasValue ? FormatMemberMentionV2(x.AssigneeId.Value) : null,
                     AssigneeName = x.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, x.AssigneeId.Value) : null,
                     x.AgeDays,
                     x.DaysWithoutChange,
@@ -1234,6 +1245,7 @@ public sealed class BotAssistantService(
                     x.Status,
                     x.Points,
                     x.AssigneeId,
+                    AssigneeMention = x.AssigneeId.HasValue ? FormatMemberMentionV2(x.AssigneeId.Value) : null,
                     AssigneeName = x.AssigneeId.HasValue ? ResolveMemberDisplayNameV2(insight, x.AssigneeId.Value) : null
                 })
                 .ToList()
@@ -1247,7 +1259,7 @@ public sealed class BotAssistantService(
             AssistantIntent.ProgressReview =>
                 "Current intent: progress_review. Prioritize sprint health, delivery vs timeline, task flow, stalled work, risk trend, and the top actionable items. Keep conclusions tied to metrics and recent evidence.",
             AssistantIntent.StandupDiscipline =>
-                "Current intent: standup_discipline. Prioritize due time, recent standups, late reporters, missing reporters, blocker evidence, time range, and member daily signals. Prefer display names over raw IDs when available.",
+                "Current intent: standup_discipline. Prioritize due time, recent standups, late reporters, missing reporters, blocker evidence, time range, and member daily signals. When a Mention field exists, use it directly instead of raw IDs or plain display names.",
             AssistantIntent.MemberInsights =>
                 "Current intent: member_insights. Prioritize member profiles, member daily signals, current workloads, recent task activity, and evidence-backed reliability. Do not imply someone is struggling unless there is blocker, repeated lateness, stalled work, or weak activity evidence.",
             AssistantIntent.TopicHistory =>
@@ -1261,7 +1273,7 @@ public sealed class BotAssistantService(
             AssistantIntent.Estimation =>
                 "Current intent: estimation. Be explicit that estimate confidence depends on task description, dependencies, and technical unknowns.",
             _ =>
-                "Current intent: general_project_assistant. Use the available context slice and keep the answer concise, evidence-based, and actionable. Prefer display names over raw IDs when available."
+                "Current intent: general_project_assistant. Use the available context slice and keep the answer concise, evidence-based, and actionable. When a Mention field exists, use it directly instead of raw IDs or plain display names."
         };
     }
 
@@ -1285,7 +1297,7 @@ public sealed class BotAssistantService(
             "For stalled task questions, use the stalledTasks list, daysWithoutChange, evidence, and recent taskFlow data before concluding that a task is stuck. " +
             "Use memberWorkloads and member profiles for questions about who is carrying the most open work right now. " +
             "For weekly discussion or history questions, rely on topics, decisions, risks, and daily digests first, then use relevant historical messages as evidence. " +
-            "Prefer display names over raw Discord IDs when available. " +
+            "When a Mention field exists, use the mention token directly instead of raw Discord IDs or plain display names. " +
             "When answering about people, topics, decisions, or risks, mention evidence, time range, and confidence when the context provides them. " +
             "For story point questions, provide an estimate with rationale and uncertainty. " +
             "Do not claim you searched the whole Discord if the context only contains summaries or recent messages.";
