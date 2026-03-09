@@ -113,6 +113,14 @@ public sealed class ProjectKnowledgeService(
             taskEvents = taskEvents
                 .Where(x => !x.ActorDiscordId.HasValue || !botUserIds.Contains(x.ActorDiscordId.Value))
                 .ToList();
+            var completionEvents = await db.TaskEvents
+                .AsNoTracking()
+                .Where(x =>
+                    x.ProjectId == projectId &&
+                    (x.EventType == TaskEventType.Completed || x.EventType == TaskEventType.BugFixed))
+                .OrderByDescending(x => x.OccurredAtUtc)
+                .ThenByDescending(x => x.Id)
+                .ToListAsync(cancellationToken);
 
             var taskCreations = await db.TaskItems
                 .AsNoTracking()
@@ -123,20 +131,56 @@ public sealed class ProjectKnowledgeService(
                 .AsNoTracking()
                 .Where(x => x.ProjectId == projectId)
                 .ToDictionaryAsync(x => x.Id, x => x.Name, cancellationToken);
-            var completedWorkItems = await db.TaskItems
+            var doneWorkSnapshots = await db.TaskItems
                 .AsNoTracking()
                 .Where(x => x.ProjectId == projectId && x.AssigneeId.HasValue && x.Status == TaskItemStatus.Done)
-                .Select(x => new CompletedWorkSeed(
-                    x.AssigneeId!.Value,
-                    x.Type,
+                .Select(x => new DoneWorkSnapshot(
                     x.Id,
+                    x.Type,
                     x.Title,
                     x.Points,
-                    x.SprintId))
+                    x.SprintId,
+                    x.AssigneeId))
                 .ToListAsync(cancellationToken);
-            completedWorkItems = completedWorkItems
-                .Where(x => !botUserIds.Contains(x.AssigneeId))
-                .ToList();
+            var latestCompletionByTaskId = completionEvents
+                .GroupBy(x => x.TaskItemId)
+                .ToDictionary(x => x.Key, x => x.First());
+            var completedWorkItems = new List<CompletedWorkSeed>();
+            foreach (var item in doneWorkSnapshots)
+            {
+                if (latestCompletionByTaskId.TryGetValue(item.TaskItemId, out var completionEvent))
+                {
+                    var attributedUserId = completionEvent.ActorDiscordId
+                        ?? completionEvent.ToAssigneeId
+                        ?? completionEvent.FromAssigneeId
+                        ?? item.AssigneeId;
+                    if (attributedUserId.HasValue && !botUserIds.Contains(attributedUserId.Value))
+                    {
+                        completedWorkItems.Add(new CompletedWorkSeed(
+                            attributedUserId.Value,
+                            item.TaskType,
+                            item.TaskItemId,
+                            item.Title,
+                            item.Points,
+                            item.SprintId,
+                            completionEvent.ActorDiscordId.HasValue));
+                    }
+
+                    continue;
+                }
+
+                if (item.AssigneeId.HasValue && !botUserIds.Contains(item.AssigneeId.Value))
+                {
+                    completedWorkItems.Add(new CompletedWorkSeed(
+                        item.AssigneeId.Value,
+                        item.TaskType,
+                        item.TaskItemId,
+                        item.Title,
+                        item.Points,
+                        item.SprintId,
+                        false));
+                }
+            }
 
             var topicMentions = BuildTopicMentions(projectId, topicFromDate, humanMessages, digests)
                 .GroupBy(x => new { x.ProjectId, Date = x.LocalDate.Date, x.TopicKey })
@@ -1058,8 +1102,11 @@ public sealed class ProjectKnowledgeService(
             })
             .ToList();
 
+        var sourceSuffix = completedWorkItems.Any(x => !x.FromCompletionEvent)
+            ? " Attribution uu tien completion actor; mot phan item cu fallback theo assignee snapshot."
+            : " Attribution tu completion actor.";
         var notableText = notable.Count == 0 ? string.Empty : $" Noi bat: {string.Join("; ", notable)}.";
-        return $"Toan project: done {completedTasksAllTime} task, fix {fixedBugsAllTime} bug.{notableText}";
+        return $"Toan project: done {completedTasksAllTime} task, fix {fixedBugsAllTime} bug.{notableText}{sourceSuffix}";
     }
 
     private static string BuildStandupSummary(
@@ -1318,4 +1365,5 @@ public sealed record AssistantRiskTrendPoint(
     string Summary);
 
 internal sealed record TaskCreationSeed(int TaskItemId, ulong? AssigneeId, DateTimeOffset CreatedAtUtc);
-internal sealed record CompletedWorkSeed(ulong AssigneeId, TaskItemType TaskType, int TaskItemId, string Title, int Points, int? SprintId);
+internal sealed record DoneWorkSnapshot(int TaskItemId, TaskItemType TaskType, string Title, int Points, int? SprintId, ulong? AssigneeId);
+internal sealed record CompletedWorkSeed(ulong AssigneeId, TaskItemType TaskType, int TaskItemId, string Title, int Points, int? SprintId, bool FromCompletionEvent);
