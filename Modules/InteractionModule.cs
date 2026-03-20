@@ -3,8 +3,10 @@ using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using ProjectManagerBot.Data;
 using ProjectManagerBot.Models;
+using ProjectManagerBot.Options;
 using ProjectManagerBot.Services;
 using System.Collections.Concurrent;
 using System.Data;
@@ -2235,7 +2237,9 @@ public sealed class InteractionModule(
 
     private async Task<Project?> ResolveProjectFromChannelAsync()
     {
-        var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var project = await _projectService.GetProjectByChannelHierarchyAsync(
+            Context.Channel.Id,
+            GetParentChannelId());
         if (project is not null)
         {
             return project;
@@ -2246,6 +2250,13 @@ public sealed class InteractionModule(
             ephemeral: true);
 
         return null;
+    }
+
+    private ulong? GetParentChannelId()
+    {
+        return Context.Channel is SocketThreadChannel threadChannel
+            ? threadChannel.ParentChannel?.Id
+            : null;
     }
 
     private bool IsLeadOrAdmin()
@@ -2944,12 +2955,14 @@ public sealed class InteractionModule(
 [RequireContext(ContextType.Guild)]
 public sealed class ProjectCommandModule(
     ProjectService projectService,
-    GitHubTrackingService gitHubTrackingService) : InteractionModuleBase<SocketInteractionContext>
+    GitHubTrackingService gitHubTrackingService,
+    IOptions<GitHubTrackingOptions> gitHubTrackingOptions) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
 
     private readonly ProjectService _projectService = projectService;
     private readonly GitHubTrackingService _gitHubTrackingService = gitHubTrackingService;
+    private readonly GitHubTrackingOptions _gitHubTrackingOptions = gitHubTrackingOptions.Value;
 
     [SlashCommand("setup", "Gắn kênh hiện tại vào dự án và khởi tạo dashboard.")]
     public async Task SetupProjectAsync(string name)
@@ -2980,7 +2993,11 @@ public sealed class ProjectCommandModule(
             ?? Context.Guild.TextChannels.FirstOrDefault(x =>
                 x.Name.Contains("daily-standup", StringComparison.OrdinalIgnoreCase));
         var githubCommitsChannel = Context.Guild.TextChannels
-            .FirstOrDefault(x => x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(x =>
+                x.CategoryId == currentCategoryId &&
+                x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase))
+            ?? Context.Guild.TextChannels.FirstOrDefault(x =>
+                x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
         var globalTaskFeed = Context.Guild.TextChannels
             .FirstOrDefault(x =>
                 x.CategoryId == currentCategoryId &&
@@ -3030,7 +3047,7 @@ public sealed class ProjectCommandModule(
         }
 
         await DeferAsync(ephemeral: true);
-        var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var project = await ResolveProjectFromCurrentChannelAsync();
         if (project is null)
         {
             await FollowupAsync("Kênh này chưa gắn với dự án nào. Hãy dùng `/project setup` trước.", ephemeral: true);
@@ -3063,7 +3080,10 @@ public sealed class ProjectCommandModule(
             $"- Repo game: `{normalizedRepo}`\n" +
             $"- Branch: {branchDisplay}\n" +
             (isTrackAllBranches ? "- Chế độ: tự mở rộng khi có nhánh mới\n" : string.Empty) +
-            $"- Kênh thông báo: <#{targetChannelId}>",
+            $"- Kênh thông báo: <#{targetChannelId}>" +
+            (_gitHubTrackingOptions.Enabled
+                ? string.Empty
+                : "\n- Lưu ý: theo dõi GitHub nền đang tắt trong cấu hình, nên push mới sẽ chưa tự gửi cho tới khi bật `GITHUB_TRACKING_ENABLED=true`."),
             ephemeral: true);
     }
 
@@ -3086,7 +3106,7 @@ public sealed class ProjectCommandModule(
         }
 
         await DeferAsync(ephemeral: true);
-        var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var project = await ResolveProjectFromCurrentChannelAsync();
         if (project is null)
         {
             await FollowupAsync("Kênh này chưa gắn với dự án nào. Hãy dùng `/project setup` trước.", ephemeral: true);
@@ -3120,7 +3140,7 @@ public sealed class ProjectCommandModule(
         }
 
         await DeferAsync(ephemeral: true);
-        var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var project = await ResolveProjectFromCurrentChannelAsync();
         if (project is null)
         {
             await FollowupAsync("Kênh này chưa gắn với dự án nào. Hãy dùng `/project setup` trước.", ephemeral: true);
@@ -3181,7 +3201,7 @@ public sealed class ProjectCommandModule(
         }
 
         await DeferAsync(ephemeral: true);
-        var project = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var project = await ResolveProjectFromCurrentChannelAsync();
         if (project is null)
         {
             await FollowupAsync("Kênh này chưa gắn với dự án nào. Hãy dùng `/project setup` trước.", ephemeral: true);
@@ -3190,7 +3210,10 @@ public sealed class ProjectCommandModule(
 
         var notifications = await _gitHubTrackingService.PollProjectAsync(project.Id);
         await FollowupAsync(
-            $"Đã quét GitHub cho dự án `{project.Name}`. Số thông báo push mới gửi: `{notifications}`.",
+            $"Đã quét GitHub cho dự án `{project.Name}`. Số thông báo push mới gửi: `{notifications}`." +
+            (_gitHubTrackingOptions.Enabled
+                ? string.Empty
+                : "\n- Theo dõi GitHub nền hiện đang tắt cấu hình, nên đây chỉ là lần quét thủ công."),
             ephemeral: true);
     }
 
@@ -3222,6 +3245,20 @@ public sealed class ProjectCommandModule(
         catch
         {
         }
+    }
+
+    private async Task<Project?> ResolveProjectFromCurrentChannelAsync()
+    {
+        return await _projectService.GetProjectByChannelHierarchyAsync(
+            Context.Channel.Id,
+            GetParentChannelId());
+    }
+
+    private ulong? GetParentChannelId()
+    {
+        return Context.Channel is SocketThreadChannel threadChannel
+            ? threadChannel.ParentChannel?.Id
+            : null;
     }
 
     private bool IsLeadOrAdmin()
@@ -3505,7 +3542,9 @@ public sealed class TestCommandModule(
             return await _projectService.GetProjectByIdAsync(projectId.Value);
         }
 
-        var byChannel = await _projectService.GetProjectByChannelAsync(Context.Channel.Id);
+        var byChannel = await _projectService.GetProjectByChannelHierarchyAsync(
+            Context.Channel.Id,
+            GetParentChannelId());
         if (byChannel is not null)
         {
             return byChannel;
@@ -3513,6 +3552,13 @@ public sealed class TestCommandModule(
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
         return await db.Projects.AsNoTracking().OrderBy(x => x.Id).FirstOrDefaultAsync();
+    }
+
+    private ulong? GetParentChannelId()
+    {
+        return Context.Channel is SocketThreadChannel threadChannel
+            ? threadChannel.ParentChannel?.Id
+            : null;
     }
 
     private bool IsLeadOrAdmin()

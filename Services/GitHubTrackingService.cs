@@ -534,9 +534,26 @@ public sealed class GitHubTrackingService(
             return null;
         }
 
-        return guildChannel.Guild.TextChannels.FirstOrDefault(x =>
+        var textChannels = guildChannel.Guild.TextChannels;
+        var categoryId = (guildChannel as SocketTextChannel)?.CategoryId;
+
+        if (categoryId.HasValue)
+        {
+            var categoryMatch = textChannels.FirstOrDefault(x =>
+                                    x.CategoryId == categoryId.Value &&
+                                    x.Name.Equals(GitHubCommitsChannelName, StringComparison.OrdinalIgnoreCase))
+                                ?? textChannels.FirstOrDefault(x =>
+                                    x.CategoryId == categoryId.Value &&
+                                    x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
+            if (categoryMatch is not null)
+            {
+                return categoryMatch;
+            }
+        }
+
+        return textChannels.FirstOrDefault(x =>
                    x.Name.Equals(GitHubCommitsChannelName, StringComparison.OrdinalIgnoreCase))
-               ?? guildChannel.Guild.TextChannels.FirstOrDefault(x =>
+               ?? textChannels.FirstOrDefault(x =>
                    x.Name.Contains("github-commits", StringComparison.OrdinalIgnoreCase));
     }
 

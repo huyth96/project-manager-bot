@@ -33,7 +33,6 @@ public sealed class AutomationService(
             try
             {
                 await TryRunStandupPromptAsync(stoppingToken);
-                await TryRunDailyLeadReportAsync(stoppingToken);
                 await TryRunWeeklyReviewAsync(stoppingToken);
                 await TryRunOverdueTaskReminderAsync(stoppingToken);
                 await TryRunSprintAutoCloseAsync(stoppingToken);
