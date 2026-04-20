@@ -82,6 +82,26 @@ public sealed class NotificationService(
         TaskItem task,
         CancellationToken cancellationToken = default)
     {
+        await NotifyTasksAssignedAsync(
+            projectId,
+            assignedByDiscordId,
+            assigneeDiscordId,
+            [task],
+            cancellationToken);
+    }
+
+    public async Task NotifyTasksAssignedAsync(
+        int projectId,
+        ulong assignedByDiscordId,
+        ulong assigneeDiscordId,
+        IReadOnlyCollection<TaskItem> tasks,
+        CancellationToken cancellationToken = default)
+    {
+        if (tasks.Count == 0)
+        {
+            return;
+        }
+
         await SendAsync(
             projectId,
             new EmbedBuilder()
@@ -91,11 +111,10 @@ public sealed class NotificationService(
                     "🎯 Phân Công\n" +
                     $"- **Giao bởi:** <@{assignedByDiscordId}>\n" +
                     $"- **Người nhận:** <@{assigneeDiscordId}>\n" +
+                    $"- **Số nhiệm vụ:** `{tasks.Count}`\n" +
                     "━━━━━━━━━━━━━━━━━━━━\n" +
-                    $"📌 Nhiệm vụ #{task.Id}\n" +
-                    $"- **Tên:** **{task.Title}**\n" +
-                    $"- **Điểm:** `{task.Points}`\n" +
-                    $"- **Trạng thái:** `{GetStatusLabel(task.Status)}`")
+                    "📜 Danh sách\n" +
+                    BuildTaskList(tasks))
                 .WithCurrentTimestamp()
                 .Build(),
             cancellationToken);

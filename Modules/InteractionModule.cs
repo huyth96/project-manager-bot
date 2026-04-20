@@ -30,8 +30,10 @@ public sealed class InteractionModule(
     private const int EphemeralPanelAutoDeleteSeconds = 180;
     private const int BacklogJsonImportMaxItems = 50;
     private static readonly ConcurrentDictionary<string, SprintDraftState> SprintDrafts = new();
+    private static readonly ConcurrentDictionary<string, AssignmentDraftState> AssignmentDrafts = new();
     private static readonly int[] SprintPickerHours = [9, 12, 15, 18, 21];
     private static readonly TimeSpan SprintDraftTtl = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan AssignmentDraftTtl = TimeSpan.FromMinutes(10);
 
     private readonly InitialSetupService _initialSetupService = initialSetupService;
     private readonly ProjectService _projectService = projectService;
@@ -2008,9 +2010,9 @@ public sealed class InteractionModule(
 
         var taskMenu = new SelectMenuBuilder()
             .WithCustomId($"admin:assign_pick_task:{projectId}")
-            .WithPlaceholder("Chọn nhiệm vụ cần giao")
+            .WithPlaceholder("Chọn một hoặc nhiều nhiệm vụ cần giao")
             .WithMinValues(1)
-            .WithMaxValues(1);
+            .WithMaxValues(assignableTasks.Count);
 
         foreach (var task in assignableTasks)
         {
@@ -2022,7 +2024,7 @@ public sealed class InteractionModule(
         }
 
         var components = new ComponentBuilder().WithSelectMenu(taskMenu).Build();
-        await RespondPanelAsync("🎯 Chọn nhiệm vụ trong chu kỳ để giao", components: components);
+        await RespondPanelAsync("🎯 Chọn nhiệm vụ trong chu kỳ để giao cùng một người", components: components);
     }
 
     [ComponentInteraction("admin:assign_pick_task:*", true)]
@@ -2040,40 +2042,64 @@ public sealed class InteractionModule(
             return;
         }
 
-        var selected = selectedTaskIds.FirstOrDefault();
-        if (!int.TryParse(selected, out var taskId))
+        var taskIds = ParseSelectedTaskIds(selectedTaskIds);
+        if (taskIds.Count == 0)
         {
             await RespondAsync("Lựa chọn nhiệm vụ không hợp lệ.", ephemeral: true);
             return;
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
-        var task = await db.TaskItems.FirstOrDefaultAsync(x => x.Id == taskId && x.ProjectId == projectId && x.Type == TaskItemType.Task);
-        if (task is null)
+        var tasks = await db.TaskItems
+            .Where(x => taskIds.Contains(x.Id) &&
+                        x.ProjectId == projectId &&
+                        x.Type == TaskItemType.Task &&
+                        (x.Status == TaskItemStatus.Todo || x.Status == TaskItemStatus.InProgress))
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+
+        if (tasks.Count == 0)
         {
-            await RespondAsync("Không tìm thấy nhiệm vụ.", ephemeral: true);
+            await RespondAsync("Không tìm thấy nhiệm vụ có thể giao.", ephemeral: true);
             return;
         }
 
+        var token = Guid.NewGuid().ToString("N");
+        AssignmentDrafts[token] = new AssignmentDraftState(
+            ProjectId: projectId,
+            UserId: Context.User.Id,
+            TaskIds: tasks.Select(x => x.Id).ToArray(),
+            CreatedAtUtc: DateTimeOffset.UtcNow);
+
         var userMenu = new SelectMenuBuilder()
-            .WithCustomId($"admin:assign_pick_user:{projectId}:{task.Id}")
+            .WithCustomId($"admin:assign_pick_user:{token}")
             .WithType(ComponentType.UserSelect)
             .WithPlaceholder("Chọn thành viên được giao")
             .WithMinValues(1)
             .WithMaxValues(1);
 
         var components = new ComponentBuilder().WithSelectMenu(userMenu).Build();
+        var preview = string.Join(
+            "\n",
+            tasks
+                .Take(8)
+                .Select(task => $"- `#{task.Id}` {Truncate(task.Title, 70)}"));
+        if (tasks.Count > 8)
+        {
+            preview += $"\n- ...và `{tasks.Count - 8}` nhiệm vụ khác";
+        }
+
         await RespondPanelAsync(
-            $"👥 Giao nhiệm vụ `#{task.Id} {Truncate(task.Title, 60)}` cho:",
+            $"👥 Chọn người nhận cho `{tasks.Count}` nhiệm vụ:\n{preview}",
             components: components);
     }
 
-    [ComponentInteraction("admin:assign_pick_user:*:*", true)]
-    public async Task AssignTaskToUserAsync(string projectIdRaw, string taskIdRaw, string[] selectedUserIds)
+    [ComponentInteraction("admin:assign_pick_user:*", true)]
+    public async Task AssignTaskToUserAsync(string token, string[] selectedUserIds)
     {
-        if (!int.TryParse(projectIdRaw, out var projectId) || !int.TryParse(taskIdRaw, out var taskId))
+        var draft = await GetValidAssignmentDraftAsync(token);
+        if (draft is null)
         {
-            await RespondAsync("Ngữ cảnh giao việc không hợp lệ.", ephemeral: true);
             return;
         }
 
@@ -2091,27 +2117,43 @@ public sealed class InteractionModule(
         }
 
         await using var db = await _dbContextFactory.CreateDbContextAsync();
-        var task = await db.TaskItems.FirstOrDefaultAsync(x => x.Id == taskId && x.ProjectId == projectId && x.Type == TaskItemType.Task);
-        if (task is null)
+        var tasks = await db.TaskItems
+            .Where(x => draft.TaskIds.Contains(x.Id) &&
+                        x.ProjectId == draft.ProjectId &&
+                        x.Type == TaskItemType.Task &&
+                        (x.Status == TaskItemStatus.Todo || x.Status == TaskItemStatus.InProgress))
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+
+        if (tasks.Count == 0)
         {
-            await RespondAsync("Không tìm thấy nhiệm vụ.", ephemeral: true);
+            AssignmentDrafts.TryRemove(token, out _);
+            await RespondAsync("Không tìm thấy nhiệm vụ có thể giao. Có thể các nhiệm vụ đã đổi trạng thái.", ephemeral: true);
             return;
         }
 
-        var beforeSnapshot = TaskEventSnapshot.FromTask(task);
+        var beforeSnapshots = tasks.ToDictionary(x => x.Id, TaskEventSnapshot.FromTask);
 
-        task.AssigneeId = assigneeId;
-        if (task.Status != TaskItemStatus.Done)
+        foreach (var task in tasks)
         {
+            task.AssigneeId = assigneeId;
             task.Status = TaskItemStatus.InProgress;
         }
 
         await db.SaveChangesAsync();
-        await _taskEventService.RecordUpdatedAsync(beforeSnapshot, task, Context.User.Id, TaskEventType.Assigned, "assign_task");
-        await _projectService.RefreshDashboardMessageAsync(projectId);
-        await _notificationService.NotifyTaskAssignedAsync(projectId, Context.User.Id, assigneeId, task);
+        AssignmentDrafts.TryRemove(token, out _);
 
-        await RespondTransientAsync($"Đã giao nhiệm vụ `#{task.Id}` cho <@{assigneeId}> và chuyển sang trạng thái Đang Làm.");
+        await _taskEventService.RecordUpdatedRangeAsync(
+            tasks.Select(task => new TaskEventChange(beforeSnapshots[task.Id], TaskEventSnapshot.FromTask(task))),
+            Context.User.Id,
+            TaskEventType.Assigned,
+            "assign_task");
+        await _projectService.RefreshDashboardMessageAsync(draft.ProjectId);
+        await _notificationService.NotifyTasksAssignedAsync(draft.ProjectId, Context.User.Id, assigneeId, tasks);
+
+        var skipped = draft.TaskIds.Count - tasks.Count;
+        var skippedText = skipped > 0 ? $" Có `{skipped}` nhiệm vụ đã đổi trạng thái nên bị bỏ qua." : string.Empty;
+        await RespondTransientAsync($"Đã giao `{tasks.Count}` nhiệm vụ cho <@{assigneeId}> và chuyển sang trạng thái Đang Làm.{skippedText}");
     }
 
     [ComponentInteraction("standup:report:*", true)]
@@ -2566,6 +2608,30 @@ public sealed class InteractionModule(
         {
             SprintDrafts.TryRemove(token, out _);
             await RespondAsync("Phiên chọn thời gian đã hết hạn. Hãy bắt đầu lại thao tác tạo chu kỳ.", ephemeral: true);
+            return null;
+        }
+
+        return draft;
+    }
+
+    private async Task<AssignmentDraftState?> GetValidAssignmentDraftAsync(string token)
+    {
+        if (!AssignmentDrafts.TryGetValue(token, out var draft))
+        {
+            await RespondAsync("Phiên giao nhiệm vụ đã hết hạn hoặc không tồn tại.", ephemeral: true);
+            return null;
+        }
+
+        if (draft.UserId != Context.User.Id)
+        {
+            await RespondAsync("Bạn không thể thao tác trên phiên giao nhiệm vụ của người khác.", ephemeral: true);
+            return null;
+        }
+
+        if (DateTimeOffset.UtcNow - draft.CreatedAtUtc > AssignmentDraftTtl)
+        {
+            AssignmentDrafts.TryRemove(token, out _);
+            await RespondAsync("Phiên giao nhiệm vụ đã hết hạn. Hãy bắt đầu lại thao tác giao nhiệm vụ.", ephemeral: true);
             return null;
         }
 
@@ -3642,6 +3708,12 @@ public sealed record SprintDraftState(
     DateTimeOffset CreatedAtUtc,
     DateTime? StartDateLocal,
     DateTime? EndDateLocal);
+
+public sealed record AssignmentDraftState(
+    int ProjectId,
+    ulong UserId,
+    IReadOnlyCollection<int> TaskIds,
+    DateTimeOffset CreatedAtUtc);
 
 public sealed record BacklogImportDraft(
     string Title,
