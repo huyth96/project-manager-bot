@@ -3020,15 +3020,61 @@ public sealed class InteractionModule(
 [Group("project", "Lệnh dự án")]
 [RequireContext(ContextType.Guild)]
 public sealed class ProjectCommandModule(
+    InitialSetupService initialSetupService,
     ProjectService projectService,
     GitHubTrackingService gitHubTrackingService,
     IOptions<GitHubTrackingOptions> gitHubTrackingOptions) : InteractionModuleBase<SocketInteractionContext>
 {
     private const int EphemeralAutoDeleteSeconds = 20;
 
+    private readonly InitialSetupService _initialSetupService = initialSetupService;
     private readonly ProjectService _projectService = projectService;
     private readonly GitHubTrackingService _gitHubTrackingService = gitHubTrackingService;
     private readonly GitHubTrackingOptions _gitHubTrackingOptions = gitHubTrackingOptions.Value;
+
+    [SlashCommand("create", "Tạo một khu project mới với category và các kênh giống Project A.")]
+    public async Task CreateProjectAsync(string name)
+    {
+        if (!IsLeadOrAdmin())
+        {
+            await RespondAsync("Chỉ Trưởng nhóm/Quản trị mới có thể tạo project mới.", ephemeral: true);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            await RespondAsync("Tên project không được để trống.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+
+        var workspace = await _initialSetupService.CreateProjectWorkspaceAsync(Context.Guild, name.Trim());
+        var project = await _projectService.UpsertProjectAsync(
+            name: workspace.ProjectName,
+            channelId: workspace.DashboardChannelId,
+            bugChannelId: workspace.BugsChannelId,
+            standupChannelId: workspace.DailyStandupChannelId,
+            githubCommitsChannelId: workspace.GitHubCommitsChannelId,
+            globalNotificationChannelId: workspace.TaskFeedChannelId);
+
+        await _projectService.RefreshDashboardMessageAsync(project.Id);
+
+        await FollowupAsync(
+            $"Đã tạo khu project mới.\n" +
+            $"- Dự án: `{project.Name}` (`{project.Id}`)\n" +
+            $"- Category: `{workspace.CategoryName}`\n" +
+            $"- Dashboard: <#{workspace.DashboardChannelId}>\n" +
+            $"- Backlog: <#{workspace.BacklogChannelId}>\n" +
+            $"- General: <#{workspace.GeneralChannelId}>\n" +
+            $"- Art Showcase: <#{workspace.ArtShowcaseChannelId}>\n" +
+            $"- Dev Talk: <#{workspace.DevTalkChannelId}>\n" +
+            $"- Bugs: <#{workspace.BugsChannelId}>\n" +
+            $"- Daily Standup: <#{workspace.DailyStandupChannelId}>\n" +
+            $"- Task Feed: <#{workspace.TaskFeedChannelId}>\n" +
+            $"- GitHub Commits: <#{workspace.GitHubCommitsChannelId}>",
+            ephemeral: true);
+    }
 
     [SlashCommand("setup", "Gắn kênh hiện tại vào dự án và khởi tạo dashboard.")]
     public async Task SetupProjectAsync(string name)

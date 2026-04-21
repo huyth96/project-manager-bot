@@ -46,6 +46,123 @@ public sealed class InitialSetupService(
         return SetupStudioAsync(guild, resetAllChannels: false, cancellationToken);
     }
 
+    public async Task<ProjectWorkspaceSetupResult> CreateProjectWorkspaceAsync(
+        SocketGuild guild,
+        string projectName,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedProjectName = NormalizeProjectName(projectName);
+
+        var leadRole = await EnsureRoleAsync(guild, "Studio Lead", new Color(230, 126, 34), isHoisted: true);
+        var guestRole = await EnsureRoleAsync(guild, "Guest", new Color(149, 165, 166));
+        var developerRole = await EnsureRoleAsync(guild, "Developer", new Color(52, 152, 219));
+        var artistRole = await EnsureRoleAsync(guild, "Artist", new Color(231, 76, 60));
+
+        var projectCategory = await EnsureCategoryAsync(guild, BuildProjectCategoryName(normalizedProjectName));
+        var botZone = await EnsureCategoryAsync(guild, BotZoneCategory);
+
+        var slug = BuildProjectSlug(normalizedProjectName);
+        var dashboard = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F5FA\uFE0F-{slug}-dashboard",
+            $"Bảng điều phối sprint và trạng thái của {normalizedProjectName}.");
+        var backlog = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F4DC-{slug}-backlog",
+            $"Nơi thêm nhiệm vụ tồn đọng trước khi vào sprint của {normalizedProjectName}.");
+        var general = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F3AE-{slug}-general",
+            $"Trao đổi công việc chung của team {normalizedProjectName}.");
+        var artShowcase = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F3A8-{slug}-art-showcase",
+            $"Đăng art và nhận góp ý cho {normalizedProjectName}.");
+        var devTalk = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F4BB-{slug}-dev-talk",
+            $"Trao đổi kỹ thuật, kiến trúc và triển khai của {normalizedProjectName}.");
+        var bugs = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F41E-{slug}-bugs",
+            $"Báo lỗi và theo dõi trạng thái xử lý bug của {normalizedProjectName}.");
+        var dailyStandup = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F4DD-{slug}-daily-standup",
+            $"Nơi bot nhắc và tổng hợp báo cáo hằng ngày của {normalizedProjectName}.");
+        var taskFeed = await EnsureTextChannelAsync(
+            guild,
+            projectCategory.Id,
+            $"\U0001F4E2-{slug}-task-feed",
+            $"Thông báo task của {normalizedProjectName}: quá hạn, cập nhật quan trọng.");
+        var githubCommits = await EnsureTextChannelAsync(
+            guild,
+            botZone.Id,
+            "\U0001F4E6-github-commits",
+            "Log commit/push tự động từ GitHub.");
+
+        await ConfigureDashboardPermissionsAsync(guild, dashboard, leadRole);
+        await ConfigureMemberVisibilityAsync(
+            guild,
+            leadRole,
+            developerRole,
+            artistRole,
+            importantReadOnlyChannels:
+            [
+                dashboard,
+                taskFeed
+            ],
+            teamOnlyTextChannels:
+            [
+                backlog,
+                general,
+                artShowcase,
+                devTalk,
+                bugs,
+                dailyStandup
+            ],
+            teamOnlyVoiceChannels: []);
+        await ConfigureGuestAccessAsync(
+            guild,
+            guestRole,
+            general,
+            artShowcase,
+            mainHallReadOnlyChannels: [],
+            restrictedTextChannels:
+            [
+                dashboard,
+                backlog,
+                devTalk,
+                bugs,
+                dailyStandup,
+                taskFeed
+            ],
+            restrictedVoiceChannels: []);
+
+        return new ProjectWorkspaceSetupResult
+        {
+            CategoryId = projectCategory.Id,
+            CategoryName = projectCategory.Name,
+            DashboardChannelId = dashboard.Id,
+            BacklogChannelId = backlog.Id,
+            GeneralChannelId = general.Id,
+            ArtShowcaseChannelId = artShowcase.Id,
+            DevTalkChannelId = devTalk.Id,
+            BugsChannelId = bugs.Id,
+            DailyStandupChannelId = dailyStandup.Id,
+            TaskFeedChannelId = taskFeed.Id,
+            GitHubCommitsChannelId = githubCommits.Id,
+            ProjectName = normalizedProjectName
+        };
+    }
+
     private async Task<StudioSetupResult> SetupStudioAsync(
         SocketGuild guild,
         bool resetAllChannels,
@@ -962,6 +1079,58 @@ public sealed class InitialSetupService(
         return $"https://discord.com/channels/{guild.Id}/{channelId}";
     }
 
+    private static string NormalizeProjectName(string projectName)
+    {
+        var trimmed = projectName.Trim();
+        if (trimmed.StartsWith("Project:", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("Project ", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed;
+        }
+
+        return $"Project: {trimmed}";
+    }
+
+    private static string BuildProjectCategoryName(string normalizedProjectName)
+    {
+        return $"\u2694\uFE0F {normalizedProjectName}";
+    }
+
+    private static string BuildProjectSlug(string normalizedProjectName)
+    {
+        var raw = normalizedProjectName
+            .Replace("Project:", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim();
+
+        var buffer = new List<char>(raw.Length);
+        var previousWasDash = false;
+        foreach (var character in raw.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                buffer.Add(character);
+                previousWasDash = false;
+                continue;
+            }
+
+            if (previousWasDash)
+            {
+                continue;
+            }
+
+            buffer.Add('-');
+            previousWasDash = true;
+        }
+
+        var slug = new string(buffer.ToArray()).Trim('-');
+        if (string.IsNullOrWhiteSpace(slug))
+        {
+            return "project";
+        }
+
+        return slug.Length <= 24 ? slug : slug[..24].Trim('-');
+    }
+
     private async Task ConfigureCommandLogsPermissionsAsync(SocketGuild guild, ITextChannel commandLogs, IRole leadRole)
     {
         await commandLogs.AddPermissionOverwriteAsync(
@@ -998,4 +1167,20 @@ public sealed class StudioSetupResult
     public ulong ShopChannelId { get; set; }
     public ulong MusicChannelId { get; set; }
     public int DeletedChannelsCount { get; set; }
+}
+
+public sealed class ProjectWorkspaceSetupResult
+{
+    public ulong CategoryId { get; set; }
+    public string CategoryName { get; set; } = string.Empty;
+    public ulong DashboardChannelId { get; set; }
+    public ulong BacklogChannelId { get; set; }
+    public ulong GeneralChannelId { get; set; }
+    public ulong ArtShowcaseChannelId { get; set; }
+    public ulong DevTalkChannelId { get; set; }
+    public ulong BugsChannelId { get; set; }
+    public ulong DailyStandupChannelId { get; set; }
+    public ulong TaskFeedChannelId { get; set; }
+    public ulong GitHubCommitsChannelId { get; set; }
+    public string ProjectName { get; set; } = string.Empty;
 }
